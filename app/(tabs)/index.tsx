@@ -1,13 +1,16 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { ResizeMode, Video } from 'expo-av';
+import { useEvent } from 'expo';
 import * as Haptics from 'expo-haptics';
+import { Image } from 'expo-image';
 import { router, useFocusEffect } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useVideoPlayer, VideoView } from 'expo-video';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
   Dimensions,
   Easing,
+  FlatList,
   Linking,
   Pressable,
   ScrollView,
@@ -16,19 +19,23 @@ import {
   Text,
   TouchableOpacity,
   View,
+  ViewToken,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
-import { DbRecipe, Ingredient, formatAmount, getCurrentUserId, getDeviceId, supabase } from '../../lib/supabase';
+import { cartStore, consolidateCart, getDefaultPeople, useCart } from '../../lib/cartStore';
+import { DbRecipe, formatAmount, getCurrentUserId, getDeviceId, Ingredient, supabase } from '../../lib/supabase';
 import { useTabBarScroll } from '../../lib/tabBarStore';
 
-const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
+const screen = Dimensions.get('screen');
+const SCREEN_HEIGHT = screen.height;
+const SCREEN_WIDTH = screen.width;
 const SLIDE_HEIGHT = SCREEN_HEIGHT;
 const DOUBLE_TAP_DELAY = 280;
 const BOTTOM_BAR_OFFSET = 90;
 const LIKE_BTN_TARGET_X = SCREEN_WIDTH - 34;
 const LIKE_BTN_TARGET_Y = SLIDE_HEIGHT - 285;
-const CART_STORAGE_KEY = 'cart_persistent_v2';
+const PRELOAD_RANGE = 1;
 
 const haptic = (type: 'light' | 'medium' | 'heavy' | 'success' = 'light') => {
   try {
@@ -69,6 +76,80 @@ const Spinner = ({ size = 40, color = '#FFFFFF', baseColor = 'rgba(255,255,255,0
         transform: [{ rotate: rotate.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) }],
       }}
     />
+  );
+};
+
+const Poster = ({ uri }: { uri?: string | null }) => {
+  if (!uri) return null;
+  return (
+    <Image
+      source={{ uri }}
+      style={StyleSheet.absoluteFill}
+      contentFit="cover"
+      cachePolicy="memory-disk"
+      transition={0}
+    />
+  );
+};
+
+type FeedVideoProps = {
+  uri: string;
+  posterUri?: string | null;
+  isActive: boolean;
+  shouldPlay: boolean;
+  onBufferingChange: (isLoading: boolean) => void;
+};
+
+const FeedVideo = ({ uri, posterUri, isActive, shouldPlay, onBufferingChange }: FeedVideoProps) => {
+  const player = useVideoPlayer(uri, (p) => {
+    p.loop = true;
+    p.muted = false;
+    try {
+      p.bufferOptions = {
+        preferredForwardBufferDuration: 4,
+        waitsToMinimizeStalling: false,
+      };
+    } catch (e) {}
+  });
+
+  const { status } = useEvent(player, 'statusChange', { status: player.status });
+
+  const onBufferingChangeRef = useRef(onBufferingChange);
+  onBufferingChangeRef.current = onBufferingChange;
+
+  useEffect(() => {
+    try {
+      if (shouldPlay) {
+        player.muted = false;
+        player.play();
+      } else {
+        player.pause();
+        if (!isActive) player.muted = true;
+      }
+    } catch (e) {}
+  }, [shouldPlay, isActive, player]);
+
+  useEffect(() => {
+    if (isActive) return;
+    try { player.currentTime = 0; } catch (e) {}
+  }, [isActive, player]);
+
+  useEffect(() => {
+    if (isActive) onBufferingChangeRef.current(status === 'loading');
+  }, [status, isActive]);
+
+  const showPoster = !isActive || status !== 'readyToPlay';
+
+  return (
+    <View style={styles.video} pointerEvents="none">
+      <VideoView
+        player={player}
+        style={StyleSheet.absoluteFill}
+        contentFit="cover"
+        nativeControls={false}
+      />
+      {showPoster && <Poster uri={posterUri} />}
+    </View>
   );
 };
 
@@ -141,43 +222,6 @@ const filterRecipes = (recipes: DbRecipe[], diet: string, budget: string): DbRec
   });
 };
 
-type CartItem = {
-  recipeId: string;
-  recipeTitle: string;
-  basePeople: number;
-  currentPeople: number;
-  baseIngredients: Ingredient[];
-};
-
-const isValidCartItem = (item: any): item is CartItem => {
-  return item
-    && typeof item.recipeId === 'string'
-    && typeof item.recipeTitle === 'string'
-    && typeof item.basePeople === 'number' && item.basePeople > 0
-    && typeof item.currentPeople === 'number' && item.currentPeople > 0
-    && Array.isArray(item.baseIngredients);
-};
-
-const consolidateCart = (cart: CartItem[]): Ingredient[] => {
-  const map = new Map<string, Ingredient>();
-  cart.forEach(item => {
-    const scale = item.currentPeople / item.basePeople;
-    item.baseIngredients.forEach(ing => {
-      const key = `${ing.name.trim().toLowerCase()}__${(ing.unit || '').trim().toLowerCase()}`;
-      const scaledAmount = (ing.amount !== null && ing.amount !== undefined) ? ing.amount * scale : null;
-      const existing = map.get(key);
-      if (existing) {
-        if (existing.amount !== null && existing.amount !== undefined && scaledAmount !== null) {
-          existing.amount = existing.amount + scaledAmount;
-        }
-      } else {
-        map.set(key, { name: ing.name, unit: ing.unit, amount: scaledAmount });
-      }
-    });
-  });
-  return Array.from(map.values());
-};
-
 export default function FeedScreen() {
   const insets = useSafeAreaInsets();
   const tabScroll = useTabBarScroll();
@@ -187,8 +231,7 @@ export default function FeedScreen() {
   const [likesCount, setLikesCount] = useState<{ [key: string]: number }>({});
   const [pausedIds, setPausedIds] = useState<{ [key: string]: boolean }>({});
   const [bufferingIds, setBufferingIds] = useState<{ [key: string]: boolean }>({});
-  const [cart, setCart] = useState<CartItem[]>([]);
-  const [cartLoaded, setCartLoaded] = useState(false);
+  const cart = useCart();
   const [showCart, setShowCart] = useState(false);
   const [toast, setToast] = useState('');
   const [supermarche, setSupermarche] = useState('leclerc');
@@ -201,29 +244,17 @@ export default function FeedScreen() {
   const lastTapRef = useRef<number>(0);
   const tapTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 60 }).current;
+  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) => {
+    const first = viewableItems.find(v => v.isViewable && v.index !== null && v.index !== undefined);
+    if (first && typeof first.index === 'number') {
+      setActiveIndex(prev => (prev === first.index ? prev : (first.index as number)));
+    }
+  }).current;
+
   useEffect(() => {
     return () => { if (tapTimeoutRef.current) clearTimeout(tapTimeoutRef.current); };
   }, []);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const saved = await AsyncStorage.getItem(CART_STORAGE_KEY);
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.every(isValidCartItem)) {
-            setCart(parsed);
-          }
-        }
-      } catch (e) {}
-      setCartLoaded(true);
-    })();
-  }, []);
-
-  useEffect(() => {
-    if (!cartLoaded) return;
-    AsyncStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart)).catch(() => {});
-  }, [cart, cartLoaded]);
 
   const consolidatedIngredients = useMemo(() => consolidateCart(cart), [cart]);
 
@@ -371,42 +402,38 @@ export default function FeedScreen() {
     }
   };
 
-  const addToCart = (recipe: DbRecipe) => {
-    const exists = cart.some(i => i.recipeId === recipe.id);
-    if (exists) {
+  const addToCart = async (recipe: DbRecipe) => {
+    if (cartStore.has(recipe.id)) {
       haptic('light');
       showToast('Déjà dans ton panier !');
       return;
     }
     haptic('medium');
-    const basePeople = (recipe as any).base_people || 2;
-    setCart(prev => [...prev, {
+    const basePeople = recipe.base_people || 2;
+    const people = await getDefaultPeople(basePeople);
+    await cartStore.add({
       recipeId: recipe.id,
       recipeTitle: recipe.title,
       basePeople,
-      currentPeople: basePeople,
+      currentPeople: people,
       baseIngredients: recipe.ingredients,
-    }]);
+    });
     showToast(`${recipe.ingredients.length} ingrédients ajoutés !`);
   };
 
   const updatePeople = (recipeId: string, delta: number) => {
     haptic('light');
-    setCart(prev => prev.map(item =>
-      item.recipeId === recipeId
-        ? { ...item, currentPeople: Math.max(1, Math.min(20, item.currentPeople + delta)) }
-        : item
-    ));
+    cartStore.updatePeople(recipeId, delta);
   };
 
   const removeRecipe = (recipeId: string) => {
     haptic('medium');
-    setCart(prev => prev.filter(item => item.recipeId !== recipeId));
+    cartStore.remove(recipeId);
   };
 
   const clearCart = () => {
     haptic('medium');
-    setCart([]);
+    cartStore.clear();
   };
 
   const handleShare = async (recipe: DbRecipe) => {
@@ -442,14 +469,11 @@ export default function FeedScreen() {
 
   const openCart = () => { haptic('light'); setShowCart(true); };
 
-  const onPlaybackStatus = (recipeId: string, status: any) => {
-    if (status.isLoaded) {
-      const isLoading = !!status.isBuffering;
-      setBufferingIds(prev => {
-        if (prev[recipeId] === isLoading) return prev;
-        return { ...prev, [recipeId]: isLoading };
-      });
-    }
+  const onBufferingChange = (recipeId: string, isLoading: boolean) => {
+    setBufferingIds(prev => {
+      if (prev[recipeId] === isLoading) return prev;
+      return { ...prev, [recipeId]: isLoading };
+    });
   };
 
   const smName = SUPERMARCHES[supermarche]?.name || 'Leclerc';
@@ -458,6 +482,89 @@ export default function FeedScreen() {
   const HEART_START_Y = SCREEN_HEIGHT / 2;
   const DX = LIKE_BTN_TARGET_X - HEART_START_X;
   const DY = LIKE_BTN_TARGET_Y - HEART_START_Y;
+
+  const renderSlide = ({ item: recipe, index }: { item: DbRecipe; index: number }) => {
+    const isActive = activeIndex === index;
+    const isNear = Math.abs(activeIndex - index) <= PRELOAD_RANGE;
+    const isPaused = !!pausedIds[recipe.id];
+    const isBuffering = !!bufferingIds[recipe.id];
+    const isLiked = !!likes[recipe.id];
+    const count = likesCount[recipe.id] || 0;
+    const creatorName = recipe.creators?.name || 'Dricecook';
+    const avatarLetters = recipe.creators?.avatar_letters || 'DC';
+    return (
+      <View style={styles.slide}>
+        <Pressable style={styles.videoTouchArea} onPress={() => handleVideoPress(recipe)}>
+          {isNear ? (
+            <FeedVideo
+              uri={recipe.video_url}
+              posterUri={recipe.thumbnail_url}
+              isActive={isActive}
+              shouldPlay={isActive && isFocused && !isPaused}
+              onBufferingChange={(isLoading) => onBufferingChange(recipe.id, isLoading)}
+            />
+          ) : (
+            <View style={styles.video} pointerEvents="none">
+              <Poster uri={recipe.thumbnail_url} />
+            </View>
+          )}
+        </Pressable>
+
+        {isBuffering && isActive && !isPaused && (
+          <View pointerEvents="none" style={styles.spinnerOverlay}>
+            <Spinner size={48} color="#FFFFFF" baseColor="rgba(255,255,255,0.15)" />
+          </View>
+        )}
+
+        {isPaused && isActive && (
+          <View pointerEvents="none" style={styles.pauseOverlay}>
+            <IconPlay size={72} />
+          </View>
+        )}
+
+        <View style={styles.slideBody} pointerEvents="box-none">
+          <TouchableOpacity
+            style={styles.creatorRow}
+            onPress={() => goToCreator(recipe)}
+            activeOpacity={0.7}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 20 }}
+          >
+            <View style={styles.avatar}>
+              <Text style={styles.avatarText}>{avatarLetters}</Text>
+            </View>
+            <Text style={styles.creatorName}>{creatorName}</Text>
+          </TouchableOpacity>
+          <Text style={styles.slideTitle}>{recipe.title}</Text>
+          <View style={styles.pillsRow}>
+            <View style={styles.pill}><Text style={styles.pillText}>⏱ {recipe.time}</Text></View>
+            <View style={styles.pill}><Text style={styles.pillText}>{recipe.people}</Text></View>
+            <View style={styles.pill}><Text style={styles.pillText}>{recipe.price}</Text></View>
+          </View>
+          <TouchableOpacity style={styles.orderBtn} onPress={() => addToCart(recipe)} activeOpacity={0.85}>
+            <IconCart color="#fff" size={16} />
+            <Text style={styles.orderBtnText}>Ajouter au panier</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.actions}>
+          <TouchableOpacity style={styles.actionBtn} onPress={() => toggleLike(recipe)} activeOpacity={0.7}>
+            <View style={[styles.actionIcon, isLiked && styles.actionIconLiked]}>
+              <IconHeart color="#fff" size={22} filled={isLiked} />
+            </View>
+            <Text style={styles.actionLabel}>{formatLikes(count)}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.actionBtn} onPress={() => handleComment(recipe)} activeOpacity={0.7}>
+            <View style={styles.actionIcon}><IconComment color="#fff" size={22} /></View>
+            <Text style={styles.actionLabel}>Commenter</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.actionBtn} onPress={() => handleShare(recipe)} activeOpacity={0.7}>
+            <View style={styles.actionIcon}><IconShare color="#fff" size={22} /></View>
+            <Text style={styles.actionLabel}>Partager</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
 
   return (
     <View style={styles.container}>
@@ -491,93 +598,28 @@ export default function FeedScreen() {
           </TouchableOpacity>
         </View>
       ) : (
-        <ScrollView
-          pagingEnabled showsVerticalScrollIndicator={false} style={styles.feed}
-          snapToInterval={SLIDE_HEIGHT} decelerationRate="fast"
-          disableIntervalMomentum={true} snapToAlignment="start"
+        <FlatList
+          data={recipes}
+          keyExtractor={(item) => item.id}
+          renderItem={renderSlide}
+          extraData={{ activeIndex, isFocused, pausedIds, bufferingIds, likes, likesCount }}
+          style={styles.feed}
+          pagingEnabled
+          showsVerticalScrollIndicator={false}
+          snapToInterval={SLIDE_HEIGHT}
+          snapToAlignment="start"
+          decelerationRate="fast"
+          disableIntervalMomentum={true}
+          getItemLayout={(_, index) => ({ length: SLIDE_HEIGHT, offset: SLIDE_HEIGHT * index, index })}
+          initialNumToRender={2}
+          maxToRenderPerBatch={2}
+          windowSize={3}
+          viewabilityConfig={viewabilityConfig}
+          onViewableItemsChanged={onViewableItemsChanged}
           onScroll={tabScroll.onScroll}
           scrollEventThrottle={tabScroll.scrollEventThrottle}
           onMomentumScrollEnd={(e) => setActiveIndex(Math.round(e.nativeEvent.contentOffset.y / SLIDE_HEIGHT))}
-        >
-          {recipes.map((recipe, index) => {
-            const isPaused = !!pausedIds[recipe.id];
-            const isBuffering = !!bufferingIds[recipe.id];
-            const isLiked = !!likes[recipe.id];
-            const count = likesCount[recipe.id] || 0;
-            const creatorName = recipe.creators?.name || 'Dricecook';
-            const avatarLetters = recipe.creators?.avatar_letters || 'DC';
-            return (
-              <View key={recipe.id} style={styles.slide}>
-                <Pressable style={styles.videoTouchArea} onPress={() => handleVideoPress(recipe)}>
-                  <Video
-                    source={{ uri: recipe.video_url }}
-                    style={styles.video}
-                    resizeMode={ResizeMode.COVER}
-                    shouldPlay={activeIndex === index && isFocused && !isPaused}
-                    isLooping isMuted={false}
-                    progressUpdateIntervalMillis={500}
-                    usePoster={activeIndex !== index}
-                    posterSource={{ uri: recipe.thumbnail_url }}
-                    onPlaybackStatusUpdate={(status) => onPlaybackStatus(recipe.id, status)}
-                  />
-                </Pressable>
-
-                {isBuffering && activeIndex === index && !isPaused && (
-                  <View pointerEvents="none" style={styles.spinnerOverlay}>
-                    <Spinner size={48} color="#FFFFFF" baseColor="rgba(255,255,255,0.15)" />
-                  </View>
-                )}
-
-                {isPaused && activeIndex === index && (
-                  <View pointerEvents="none" style={styles.pauseOverlay}>
-                    <IconPlay size={72} />
-                  </View>
-                )}
-
-                <View style={styles.slideBody} pointerEvents="box-none">
-                  <TouchableOpacity
-                    style={styles.creatorRow}
-                    onPress={() => goToCreator(recipe)}
-                    activeOpacity={0.7}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 20 }}
-                  >
-                    <View style={styles.avatar}>
-                      <Text style={styles.avatarText}>{avatarLetters}</Text>
-                    </View>
-                    <Text style={styles.creatorName}>{creatorName}</Text>
-                  </TouchableOpacity>
-                  <Text style={styles.slideTitle}>{recipe.title}</Text>
-                  <View style={styles.pillsRow}>
-                    <View style={styles.pill}><Text style={styles.pillText}>⏱ {recipe.time}</Text></View>
-                    <View style={styles.pill}><Text style={styles.pillText}>{recipe.people}</Text></View>
-                    <View style={styles.pill}><Text style={styles.pillText}>{recipe.price}</Text></View>
-                  </View>
-                  <TouchableOpacity style={styles.orderBtn} onPress={() => addToCart(recipe)} activeOpacity={0.85}>
-                    <IconCart color="#fff" size={16} />
-                    <Text style={styles.orderBtnText}>Ajouter au panier</Text>
-                  </TouchableOpacity>
-                </View>
-
-                <View style={styles.actions}>
-                  <TouchableOpacity style={styles.actionBtn} onPress={() => toggleLike(recipe)} activeOpacity={0.7}>
-                    <View style={[styles.actionIcon, isLiked && styles.actionIconLiked]}>
-                      <IconHeart color="#fff" size={22} filled={isLiked} />
-                    </View>
-                    <Text style={styles.actionLabel}>{formatLikes(count)}</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.actionBtn} onPress={() => handleComment(recipe)} activeOpacity={0.7}>
-                    <View style={styles.actionIcon}><IconComment color="#fff" size={22} /></View>
-                    <Text style={styles.actionLabel}>Commenter</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.actionBtn} onPress={() => handleShare(recipe)} activeOpacity={0.7}>
-                    <View style={styles.actionIcon}><IconShare color="#fff" size={22} /></View>
-                    <Text style={styles.actionLabel}>Partager</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            );
-          })}
-        </ScrollView>
+        />
       )}
 
       <Animated.View
@@ -705,7 +747,7 @@ const styles = StyleSheet.create({
   feed: { flex: 1, marginTop: 0 },
   slide: { height: SLIDE_HEIGHT, width: SCREEN_WIDTH, position: 'relative', backgroundColor: '#000' },
   videoTouchArea: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1 },
-  video: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
+  video: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#000' },
   spinnerOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
   pauseOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
   slideBody: { position: 'absolute', bottom: BOTTOM_BAR_OFFSET, left: 16, right: 70, zIndex: 10, elevation: 10 },

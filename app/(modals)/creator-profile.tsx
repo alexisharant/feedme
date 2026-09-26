@@ -98,6 +98,7 @@ export default function CreatorProfileScreen() {
     const { data: recipesData } = await supabase
       .from('recipes').select('*')
       .eq('creator_id', creatorId)
+      .eq('status', 'approved')
       .order('likes_count', { ascending: false });
     if (recipesData) {
       setRecipes(recipesData as DbRecipe[]);
@@ -115,6 +116,8 @@ export default function CreatorProfileScreen() {
     router.push({
       pathname: '/(modals)/recipe' as any,
       params: {
+        id: recipe.id,
+        basePeople: String(recipe.base_people || ''),
         title: recipe.title, creator: creator?.name || '',
         time: recipe.time, people: recipe.people, price: recipe.price,
         thumbnail: recipe.thumbnail_url,

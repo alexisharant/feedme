@@ -157,6 +157,8 @@ export default function ExploreScreen() {
     router.push({
       pathname: '/(modals)/recipe' as any,
       params: {
+        id: recipe.id,
+        basePeople: String(recipe.base_people || ''),
         title: recipe.title,
         creator: recipe.creators?.name || '',
         time: recipe.time,

@@ -1,15 +1,15 @@
-import { ResizeMode, Video } from 'expo-av';
 import * as Haptics from 'expo-haptics';
 import { router, useFocusEffect } from 'expo-router';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useVideoPlayer, VideoView } from 'expo-video';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-    Alert, Animated, Easing, Image, Pressable, ScrollView, StyleSheet,
-    Text, TouchableOpacity, View,
+  Alert, Animated, Easing, Image, Pressable, ScrollView, StyleSheet,
+  Text, TouchableOpacity, View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import { isAdmin } from '../../lib/admin';
-import { DbRecipe, Ingredient, formatAmount, supabase } from '../../lib/supabase';
+import { DbRecipe, formatAmount, Ingredient, supabase } from '../../lib/supabase';
 
 const ACCENT = '#00C896';
 const ACCENT_BG = '#E8FBF5';
@@ -50,6 +50,21 @@ const Spinner = ({ size = 40, color = ACCENT }: { size?: number; color?: string 
         borderColor: '#EFEFEF', borderTopColor: color,
         transform: [{ rotate: rotate.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) }],
       }}
+    />
+  );
+};
+
+const AdminVideo = ({ uri }: { uri: string }) => {
+  const player = useVideoPlayer(uri, (p) => {
+    p.loop = false;
+    p.play();
+  });
+  return (
+    <VideoView
+      player={player}
+      style={styles.video}
+      contentFit="contain"
+      nativeControls
     />
   );
 };
@@ -219,14 +234,7 @@ export default function AdminScreen() {
               <View key={recipe.id} style={styles.card}>
                 <View style={styles.videoWrap}>
                   {isPlaying ? (
-                    <Video
-                      source={{ uri: recipe.video_url }}
-                      style={styles.video}
-                      resizeMode={ResizeMode.CONTAIN}
-                      useNativeControls
-                      isLooping={false}
-                      shouldPlay
-                    />
+                    <AdminVideo uri={recipe.video_url} />
                   ) : (
                     <Pressable style={styles.thumbWrap} onPress={() => playVideo(recipe.id)}>
                       {recipe.thumbnail_url ? (
@@ -341,7 +349,7 @@ const styles = StyleSheet.create({
   thumbWrap: { width: '100%', height: '100%', position: 'relative' },
   thumb: { width: '100%', height: '100%' },
   thumbFallback: { backgroundColor: '#1A1A1A' },
-  playOverlay: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.25)' },
+  playOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.25)' },
   playBtn: { width: 64, height: 64, borderRadius: 32, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: 'rgba(255,255,255,0.4)' },
 
   cardBody: { padding: 16 },

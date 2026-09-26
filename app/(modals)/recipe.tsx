@@ -8,6 +8,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
+import { cartStore, getDefaultPeople, useCart } from '../../lib/cartStore';
 import { Ingredient, formatAmount } from '../../lib/supabase';
 
 const ACCENT = '#00C896';
@@ -135,11 +136,17 @@ export default function RecipeScreen() {
   const price = (params.price as string) || '';
   const thumbnail = (params.thumbnail as string) || '';
   const instaUrl = (params.instaUrl as string) || '';
+  const recipeId = (params.id as string) || '';
+  const basePeopleParam = parseInt((params.basePeople as string) || '', 10);
 
   const ingredients = safeParseIngredients(params.ingredients);
 
-  const basePeople = parseBasePeople(people);
+  const basePeople = basePeopleParam > 0 ? basePeopleParam : parseBasePeople(people);
   const [currentPeople, setCurrentPeople] = useState(basePeople);
+  const cart = useCart();
+  const cartItem = recipeId ? cart.find(i => i.recipeId === recipeId) || null : null;
+  const inCart = !!cartItem;
+  const cartUpToDate = inCart && cartItem!.currentPeople === currentPeople;
   const [imgLoading, setImgLoading] = useState(true);
   const [checked, setChecked] = useState<{ [key: number]: boolean }>({});
   const [supermarche, setSupermarche] = useState('leclerc');
@@ -148,7 +155,41 @@ export default function RecipeScreen() {
     AsyncStorage.getItem('supermarche').then(sm => {
       if (sm) setSupermarche(sm);
     });
+    (async () => {
+      const existing = recipeId ? cartStore.getItem(recipeId) : null;
+      if (existing) {
+        setCurrentPeople(existing.currentPeople);
+      } else {
+        setCurrentPeople(await getDefaultPeople(basePeople));
+      }
+    })();
   }, []);
+
+  const addToCart = async () => {
+    if (!recipeId || ingredients.length === 0) return;
+    if (cartUpToDate) {
+      haptic('light');
+      return;
+    }
+    haptic('success');
+    if (inCart) {
+      await cartStore.setPeople(recipeId, currentPeople);
+    } else {
+      await cartStore.add({
+        recipeId,
+        recipeTitle: title,
+        basePeople,
+        currentPeople,
+        baseIngredients: ingredients,
+      });
+    }
+  };
+
+  const cartLabel = !inCart
+    ? 'Ajouter au panier'
+    : cartUpToDate
+    ? 'Dans ton panier ✓'
+    : 'Mettre à jour le panier';
 
   const factor = basePeople > 0 ? currentPeople / basePeople : 1;
 
@@ -185,7 +226,7 @@ export default function RecipeScreen() {
 
   return (
     <View style={styles.container}>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 190 }}>
         <View style={styles.imgWrap}>
           {thumbnail ? (
             <>
@@ -282,9 +323,23 @@ export default function RecipeScreen() {
       </ScrollView>
 
       <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 12 }]}>
-        <TouchableOpacity style={styles.checkoutBtn} onPress={checkout} activeOpacity={0.85}>
-          <IconCart />
-          <Text style={styles.checkoutBtnText}>Commander chez {smName}</Text>
+        {!!recipeId && (
+          <TouchableOpacity
+            style={[styles.checkoutBtn, cartUpToDate && styles.cartBtnDone]}
+            onPress={addToCart}
+            activeOpacity={0.85}
+          >
+            <IconCart />
+            <Text style={styles.checkoutBtnText}>{cartLabel}</Text>
+          </TouchableOpacity>
+        )}
+        <TouchableOpacity
+          style={recipeId ? styles.secondaryBtn : styles.checkoutBtn}
+          onPress={checkout}
+          activeOpacity={0.85}
+        >
+          {!recipeId && <IconCart />}
+          <Text style={recipeId ? styles.secondaryBtnText : styles.checkoutBtnText}>Commander chez {smName}</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -357,4 +412,11 @@ const styles = StyleSheet.create({
     shadowColor: '#008C68', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 1, shadowRadius: 0, elevation: 3,
   },
   checkoutBtnText: { fontSize: 15, fontWeight: '900', color: '#FFFFFF' },
+  cartBtnDone: { backgroundColor: '#00A87E' },
+  secondaryBtn: {
+    marginTop: 8, borderRadius: 100, padding: 12,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1.5, borderColor: ACCENT, backgroundColor: '#FFFFFF',
+  },
+  secondaryBtnText: { fontSize: 14, fontWeight: '800', color: ACCENT },
 });

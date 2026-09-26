@@ -7,6 +7,8 @@ export const unstable_settings = {
   anchor: '(tabs)',
 };
 
+const ONBOARDING_KEYS = ['onboardingDone', 'onboarding_done'];
+
 export default function RootLayout() {
   useEffect(() => {
     checkOnboarding();
@@ -14,7 +16,8 @@ export default function RootLayout() {
 
   const checkOnboarding = async () => {
     try {
-      const done = await AsyncStorage.getItem('onboarding_done');
+      const values = await AsyncStorage.multiGet(ONBOARDING_KEYS);
+      const done = values.some(([, value]) => !!value);
       if (!done) {
         router.replace('/(modals)/onboarding');
       }
