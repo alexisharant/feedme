@@ -1,9 +1,11 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
+import { useEvent } from 'expo';
 import { router, useLocalSearchParams } from 'expo-router';
+import { useVideoPlayer, VideoView } from 'expo-video';
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Animated, Easing, Image, Linking, ScrollView, StyleSheet,
+  Animated, Easing, Image, Linking, Pressable, ScrollView, StyleSheet,
   Text, TouchableOpacity, View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -125,6 +127,46 @@ const safeParseIngredients = (raw: any): Ingredient[] => {
   }
 };
 
+const RecipeVideo = ({ uri, poster }: { uri: string; poster: string }) => {
+  const player = useVideoPlayer(uri, (p) => {
+    p.loop = true;
+    p.play();
+  });
+  const { isPlaying } = useEvent(player, 'playingChange', { isPlaying: player.playing });
+  const { status } = useEvent(player, 'statusChange', { status: player.status });
+
+  const togglePlay = () => {
+    haptic('light');
+    try {
+      if (player.playing) player.pause();
+      else player.play();
+    } catch (e) {}
+  };
+
+  return (
+    <Pressable style={StyleSheet.absoluteFill} onPress={togglePlay}>
+      <View style={StyleSheet.absoluteFill} pointerEvents="none">
+        <VideoView player={player} style={StyleSheet.absoluteFill} contentFit="cover" nativeControls={false} />
+        {status !== 'readyToPlay' && !!poster && (
+          <Image source={{ uri: poster }} style={StyleSheet.absoluteFill} />
+        )}
+        {status === 'loading' && (
+          <View style={styles.imgSpinner}>
+            <Spinner size={36} />
+          </View>
+        )}
+        {status === 'readyToPlay' && !isPlaying && (
+          <View style={styles.videoPauseOverlay}>
+            <Svg width={64} height={64} viewBox="0 0 24 24" fill="rgba(255,255,255,0.95)">
+              <Path d="M8 5v14l11-7z" />
+            </Svg>
+          </View>
+        )}
+      </View>
+    </Pressable>
+  );
+};
+
 export default function RecipeScreen() {
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams();
@@ -137,6 +179,7 @@ export default function RecipeScreen() {
   const thumbnail = (params.thumbnail as string) || '';
   const instaUrl = (params.instaUrl as string) || '';
   const recipeId = (params.id as string) || '';
+  const videoUrl = (params.videoUrl as string) || '';
   const basePeopleParam = parseInt((params.basePeople as string) || '', 10);
 
   const ingredients = safeParseIngredients(params.ingredients);
@@ -227,8 +270,10 @@ export default function RecipeScreen() {
   return (
     <View style={styles.container}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 190 }}>
-        <View style={styles.imgWrap}>
-          {thumbnail ? (
+        <View style={[styles.imgWrap, !!videoUrl && styles.videoWrap]}>
+          {videoUrl ? (
+            <RecipeVideo uri={videoUrl} poster={thumbnail} />
+          ) : thumbnail ? (
             <>
               <Image source={{ uri: thumbnail }} style={styles.img} onLoadEnd={() => setImgLoading(false)} />
               {imgLoading && (
@@ -350,6 +395,8 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
   imgWrap: { width: '100%', height: 300, position: 'relative', backgroundColor: '#F5F5F5' },
   img: { width: '100%', height: '100%' },
+  videoWrap: { height: 480, backgroundColor: '#000' },
+  videoPauseOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.15)' },
   imgPlaceholder: { width: '100%', height: '100%', backgroundColor: '#F5F5F5' },
   imgSpinner: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
   backBtn: {

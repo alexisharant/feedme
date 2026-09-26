@@ -117,6 +117,7 @@ export default function CreatorProfileScreen() {
       pathname: '/(modals)/recipe' as any,
       params: {
         id: recipe.id,
+        videoUrl: recipe.video_url || '',
         basePeople: String(recipe.base_people || ''),
         title: recipe.title, creator: creator?.name || '',
         time: recipe.time, people: recipe.people, price: recipe.price,

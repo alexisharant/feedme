@@ -298,17 +298,6 @@ export default function AccountScreen() {
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Paramètres</Text>
-        <View style={styles.row}>
-          <View style={styles.rowLeft}>
-            <View style={styles.rowIcon}><IconBell color={ACCENT} size={18} /></View>
-            <Text style={styles.rowLabel}>Notifications</Text>
-          </View>
-          <Switch
-            value={notifs} onValueChange={toggleNotifs}
-            trackColor={{ false: '#E0E0E0', true: ACCENT }}
-            thumbColor="#FFFFFF"
-          />
-        </View>
         <TouchableOpacity style={styles.row} onPress={goToPreferences} activeOpacity={0.7}>
           <View style={styles.rowLeft}>
             <View style={styles.rowIcon}><IconSettings color={ACCENT} size={18} /></View>

@@ -64,7 +64,7 @@ const PEOPLE_OPTIONS = [
 
 const BUDGETS = [
   { id: 'low',    label: 'Petit budget',   desc: 'Moins de 10€ par recette' },
-  { id: 'medium', label: 'Budget moyen',   desc: 'Entre 10€ et 20€' },
+  { id: 'medium', label: 'Budget moyen',   desc: "Jusqu'à 20€ par recette" },
   { id: 'high',   label: 'Sans limite',    desc: 'Tous les prix' },
 ];
 

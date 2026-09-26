@@ -217,7 +217,7 @@ const filterRecipes = (recipes: DbRecipe[], diet: string, budget: string): DbRec
     if (diet === 'pescatarian' && !v.is_vegetarian && !v.is_pescatarian) return false;
     if (diet === 'glutenFree' && !v.is_gluten_free) return false;
     if (budget === 'low' && v.price_num > 10) return false;
-    if (budget === 'medium' && (v.price_num < 10 || v.price_num > 20)) return false;
+    if (budget === 'medium' && v.price_num > 20) return false;
     return true;
   });
 };

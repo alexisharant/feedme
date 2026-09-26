@@ -158,6 +158,7 @@ export default function ExploreScreen() {
       pathname: '/(modals)/recipe' as any,
       params: {
         id: recipe.id,
+        videoUrl: recipe.video_url || '',
         basePeople: String(recipe.base_people || ''),
         title: recipe.title,
         creator: recipe.creators?.name || '',
