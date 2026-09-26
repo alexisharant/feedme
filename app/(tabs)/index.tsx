@@ -24,6 +24,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { cartStore, consolidateCart, getDefaultPeople, useCart } from '../../lib/cartStore';
+import { fetchSavedIds, saveRecipe, unsaveRecipe } from '../../lib/saves';
 import { DbRecipe, formatAmount, getCurrentUserId, getDeviceId, Ingredient, supabase } from '../../lib/supabase';
 import { useTabBarScroll } from '../../lib/tabBarStore';
 
@@ -34,7 +35,12 @@ const SLIDE_HEIGHT = SCREEN_HEIGHT;
 const DOUBLE_TAP_DELAY = 280;
 const BOTTOM_BAR_OFFSET = 90;
 const LIKE_BTN_TARGET_X = SCREEN_WIDTH - 34;
-const LIKE_BTN_TARGET_Y = SLIDE_HEIGHT - 285;
+// Position du bouton cœur (1er des 4 boutons d'action à droite) pour l'animation du cœur volant.
+// Chaque bouton = icône 44 + espace 4 + libellé ~13 ; 18 d'écart entre boutons.
+const ACTION_COUNT = 4;
+const ACTION_ITEM_HEIGHT = 44 + 4 + 13;
+const ACTION_GAP = 18;
+const LIKE_BTN_TARGET_Y = SLIDE_HEIGHT - (BOTTOM_BAR_OFFSET + ACTION_COUNT * ACTION_ITEM_HEIGHT + (ACTION_COUNT - 1) * ACTION_GAP - 22);
 const PRELOAD_RANGE = 1;
 
 const haptic = (type: 'light' | 'medium' | 'heavy' | 'success' = 'light') => {
@@ -173,6 +179,12 @@ const IconComment = ({ color = '#fff', size = 26 }) => (
   </Svg>
 );
 
+const IconBookmark = ({ color = '#fff', size = 26, filled = false }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill={filled ? color : 'none'}>
+    <Path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+  </Svg>
+);
+
 const IconShare = ({ color = '#fff', size = 26 }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
     <Circle cx="18" cy="5" r="3" stroke={color} strokeWidth="1.8" fill="none"/>
@@ -228,6 +240,7 @@ export default function FeedScreen() {
   const [allRecipes, setAllRecipes] = useState<DbRecipe[]>([]);
   const [recipes, setRecipes] = useState<DbRecipe[]>([]);
   const [likes, setLikes] = useState<{ [key: string]: boolean }>({});
+  const [saved, setSaved] = useState<{ [key: string]: boolean }>({});
   const [likesCount, setLikesCount] = useState<{ [key: string]: number }>({});
   const [pausedIds, setPausedIds] = useState<{ [key: string]: boolean }>({});
   const [bufferingIds, setBufferingIds] = useState<{ [key: string]: boolean }>({});
@@ -297,6 +310,8 @@ export default function FeedScreen() {
     (likesData || []).forEach((l: any) => { likeMap[l.recipe_id] = true; });
     setLikes(likeMap);
 
+    setSaved(userId ? await fetchSavedIds(userId) : {});
+
     setLoading(false);
   };
 
@@ -355,19 +370,13 @@ export default function FeedScreen() {
     }
   };
 
+  // Le compteur likes_count est mis à jour automatiquement par Supabase (trigger SQL).
   const addLikeToDB = async (recipe: DbRecipe, userId: string) => {
-    const { error } = await supabase.from('likes').insert({ user_id: userId, recipe_id: recipe.id });
-    if (!error) {
-      await supabase.from('recipes').update({ likes_count: (likesCount[recipe.id] || 0) + 1 }).eq('id', recipe.id);
-    }
+    await supabase.from('likes').insert({ user_id: userId, recipe_id: recipe.id });
   };
 
   const removeLikeFromDB = async (recipe: DbRecipe, userId: string) => {
-    const { error } = await supabase.from('likes').delete().eq('user_id', userId).eq('recipe_id', recipe.id);
-    if (!error) {
-      const newCount = Math.max(0, (likesCount[recipe.id] || 0) - 1);
-      await supabase.from('recipes').update({ likes_count: newCount }).eq('id', recipe.id);
-    }
+    await supabase.from('likes').delete().eq('user_id', userId).eq('recipe_id', recipe.id);
   };
 
   const handleDoubleTapLike = async (recipe: DbRecipe) => {
@@ -378,8 +387,18 @@ export default function FeedScreen() {
     if (likes[recipe.id]) return;
     setLikes(prev => ({ ...prev, [recipe.id]: true }));
     setLikesCount(prev => ({ ...prev, [recipe.id]: (prev[recipe.id] || 0) + 1 }));
-    showToast('Ajouté aux favoris ❤️');
     await addLikeToDB(recipe, userId);
+  };
+
+  const toggleSave = async (recipe: DbRecipe) => {
+    const userId = await getCurrentUserId();
+    if (!userId) { haptic('light'); showAuthPrompt(); return; }
+    const wasSaved = !!saved[recipe.id];
+    haptic(wasSaved ? 'light' : 'medium');
+    setSaved(prev => ({ ...prev, [recipe.id]: !wasSaved }));
+    showToast(wasSaved ? 'Retirée de tes recettes' : 'Recette enregistrée 🔖');
+    const ok = wasSaved ? await unsaveRecipe(userId, recipe.id) : await saveRecipe(userId, recipe.id);
+    if (!ok) setSaved(prev => ({ ...prev, [recipe.id]: wasSaved }));
   };
 
   const toggleLike = async (recipe: DbRecipe) => {
@@ -390,14 +409,12 @@ export default function FeedScreen() {
       haptic('light');
       setLikes(prev => ({ ...prev, [recipe.id]: false }));
       setLikesCount(prev => ({ ...prev, [recipe.id]: Math.max(0, (prev[recipe.id] || 0) - 1) }));
-      showToast('Retiré des favoris');
       await removeLikeFromDB(recipe, userId);
     } else {
       haptic('medium');
       triggerHeartFly();
       setLikes(prev => ({ ...prev, [recipe.id]: true }));
       setLikesCount(prev => ({ ...prev, [recipe.id]: (prev[recipe.id] || 0) + 1 }));
-      showToast('Ajouté aux favoris ❤️');
       await addLikeToDB(recipe, userId);
     }
   };
@@ -553,6 +570,12 @@ export default function FeedScreen() {
             </View>
             <Text style={styles.actionLabel}>{formatLikes(count)}</Text>
           </TouchableOpacity>
+          <TouchableOpacity style={styles.actionBtn} onPress={() => toggleSave(recipe)} activeOpacity={0.7}>
+            <View style={[styles.actionIcon, !!saved[recipe.id] && styles.actionIconSaved]}>
+              <IconBookmark color="#fff" size={21} filled={!!saved[recipe.id]} />
+            </View>
+            <Text style={styles.actionLabel}>{saved[recipe.id] ? 'Enregistrée' : 'Enregistrer'}</Text>
+          </TouchableOpacity>
           <TouchableOpacity style={styles.actionBtn} onPress={() => handleComment(recipe)} activeOpacity={0.7}>
             <View style={styles.actionIcon}><IconComment color="#fff" size={22} /></View>
             <Text style={styles.actionLabel}>Commenter</Text>
@@ -602,7 +625,7 @@ export default function FeedScreen() {
           data={recipes}
           keyExtractor={(item) => item.id}
           renderItem={renderSlide}
-          extraData={{ activeIndex, isFocused, pausedIds, bufferingIds, likes, likesCount }}
+          extraData={{ activeIndex, isFocused, pausedIds, bufferingIds, likes, likesCount, saved }}
           style={styles.feed}
           pagingEnabled
           showsVerticalScrollIndicator={false}
@@ -764,6 +787,7 @@ const styles = StyleSheet.create({
   actions: { position: 'absolute', right: 12, bottom: BOTTOM_BAR_OFFSET, gap: 18, alignItems: 'center', zIndex: 10, elevation: 10 },
   actionBtn: { alignItems: 'center', gap: 4 },
   actionIcon: { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.15)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' },
+  actionIconSaved: { backgroundColor: '#00C896', borderColor: '#00C896' },
   actionIconLiked: { backgroundColor: '#FF6B6B', borderColor: '#FF6B6B' },
   actionLabel: { fontSize: 10, fontWeight: '600', color: 'rgba(255,255,255,0.8)' },
   heartFly: { position: 'absolute', top: SCREEN_HEIGHT / 2 - 70, left: SCREEN_WIDTH / 2 - 70, zIndex: 1000 },

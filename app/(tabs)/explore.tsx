@@ -1,12 +1,14 @@
 import * as Haptics from 'expo-haptics';
-import { router, useFocusEffect } from 'expo-router';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Animated, Easing, Image, ScrollView, StyleSheet, Text,
+  Animated, Dimensions, Easing, FlatList, ScrollView, StyleSheet, Text,
   TextInput, TouchableOpacity, View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
+import { RecipeCard } from '../../components/RecipeTile';
+import { openRecipe } from '../../lib/openRecipe';
 import { DbRecipe, supabase } from '../../lib/supabase';
 
 const ACCENT = '#00C896';
@@ -15,14 +17,13 @@ const TEXT_GRAY = '#8E8E8E';
 const TEXT_LIGHT = '#BDBDBD';
 const BORDER = '#EFEFEF';
 
+const H_PADDING = 14;
+const COL_GAP = 10;
+const SCREEN_WIDTH = Dimensions.get('window').width;
+const CARD_WIDTH = Math.floor((SCREEN_WIDTH - H_PADDING * 2 - COL_GAP) / 2);
+
 const haptic = () => {
   try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch (e) {}
-};
-
-const formatLikes = (n: number): string => {
-  if (n >= 1000000) return (n / 1000000).toFixed(1).replace('.0', '') + 'M';
-  if (n >= 1000) return (n / 1000).toFixed(1).replace('.0', '') + 'k';
-  return n.toString();
 };
 
 const IconSearch = ({ color = TEXT_GRAY, size = 18 }) => (
@@ -35,12 +36,6 @@ const IconSearch = ({ color = TEXT_GRAY, size = 18 }) => (
 const IconClose = ({ color = TEXT_GRAY, size = 14 }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
     <Path d="M18 6L6 18M6 6l12 12" stroke={color} strokeWidth="2.4" strokeLinecap="round"/>
-  </Svg>
-);
-
-const IconHeart = ({ color = TEXT_GRAY, size = 12 }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
-    <Path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/>
   </Svg>
 );
 
@@ -82,40 +77,6 @@ const categories = [
   { id: 'dessert',    label: 'Dessert' },
 ];
 
-const RecipeCard = ({ recipe, onPress }: { recipe: DbRecipe; onPress: () => void }) => {
-  const [imgLoading, setImgLoading] = useState(true);
-  const creatorName = recipe.creators?.name || 'Dricecook';
-
-  return (
-    <TouchableOpacity style={styles.card} activeOpacity={0.85} onPress={onPress}>
-      <View style={styles.thumbWrap}>
-        <Image
-          source={{ uri: recipe.thumbnail_url }}
-          style={styles.thumb}
-          onLoadEnd={() => setImgLoading(false)}
-        />
-        {imgLoading && (
-          <View style={styles.thumbSpinner}>
-            <Spinner size={22} color={ACCENT} baseColor="#F0F0F0" />
-          </View>
-        )}
-      </View>
-      <View style={styles.cardBody}>
-        <Text style={styles.cardCreator}>{creatorName}</Text>
-        <Text style={styles.cardTitle} numberOfLines={2}>{recipe.title}</Text>
-        <View style={styles.metaRow}>
-          <Text style={styles.metaText}>{recipe.time}</Text>
-          <View style={styles.metaDot} />
-          <Text style={styles.metaText}>{recipe.price}</Text>
-          <View style={styles.metaDot} />
-          <IconHeart color={TEXT_GRAY} size={11} />
-          <Text style={[styles.metaText, { marginLeft: 2 }]}>{formatLikes(recipe.likes_count)}</Text>
-        </View>
-      </View>
-    </TouchableOpacity>
-  );
-};
-
 export default function ExploreScreen() {
   const insets = useSafeAreaInsets();
   const [allRecipes, setAllRecipes] = useState<DbRecipe[]>([]);
@@ -129,54 +90,38 @@ export default function ExploreScreen() {
       .select('*, creators(id, handle, name, avatar_letters, avatar_color)')
       .eq('status', 'approved')
       .order('created_at', { ascending: false });
-
     if (!error && data) setAllRecipes(data as DbRecipe[]);
     setLoading(false);
   };
 
   useFocusEffect(useCallback(() => { loadRecipes(); }, []));
 
-  let filtered = [...allRecipes];
-
-  if (activeCat === 'mostliked') {
-    filtered = [...filtered].sort((a, b) => b.likes_count - a.likes_count);
-  } else if (activeCat !== 'all') {
-    filtered = filtered.filter(r => r.category === activeCat);
-  }
-
-  if (search.trim()) {
+  const filtered = useMemo(() => {
+    let list = [...allRecipes];
+    if (activeCat === 'mostliked') {
+      list.sort((a, b) => (b.likes_count || 0) - (a.likes_count || 0));
+    } else if (activeCat !== 'all') {
+      list = list.filter(r => r.category === activeCat);
+    }
     const q = search.toLowerCase().trim();
-    filtered = filtered.filter(r =>
-      r.title.toLowerCase().includes(q) ||
-      (r.creators?.name || '').toLowerCase().includes(q)
-    );
-  }
+    if (q) {
+      list = list.filter(r =>
+        r.title.toLowerCase().includes(q) ||
+        (r.creators?.name || '').toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [allRecipes, activeCat, search]);
 
   const goToRecipe = (recipe: DbRecipe) => {
     haptic();
-    router.push({
-      pathname: '/(modals)/recipe' as any,
-      params: {
-        id: recipe.id,
-        videoUrl: recipe.video_url || '',
-        basePeople: String(recipe.base_people || ''),
-        title: recipe.title,
-        creator: recipe.creators?.name || '',
-        time: recipe.time,
-        people: recipe.people,
-        price: recipe.price,
-        thumbnail: recipe.thumbnail_url,
-        ingredients: JSON.stringify(recipe.ingredients),
-        instaUrl: recipe.insta_url || '',
-      },
-    });
+    openRecipe(recipe);
   };
 
   return (
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
         <Text style={styles.title}>Explorer</Text>
-
         <View style={styles.searchBar}>
           <IconSearch color={TEXT_GRAY} size={17} />
           <TextInput
@@ -198,7 +143,9 @@ export default function ExploreScreen() {
             </TouchableOpacity>
           )}
         </View>
+      </View>
 
+      <View style={styles.catsBar}>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -223,8 +170,6 @@ export default function ExploreScreen() {
         </ScrollView>
       </View>
 
-      <View style={styles.divider} />
-
       {loading ? (
         <View style={styles.loadingBox}>
           <Spinner size={28} color={ACCENT} baseColor="#F0F0F0" />
@@ -239,16 +184,18 @@ export default function ExploreScreen() {
           </Text>
         </View>
       ) : (
-        <ScrollView
-          style={styles.list}
+        <FlatList
+          data={filtered}
+          keyExtractor={(item) => item.id}
+          numColumns={2}
+          columnWrapperStyle={styles.row}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
-        >
-          {filtered.map((recipe) => (
-            <RecipeCard key={recipe.id} recipe={recipe} onPress={() => goToRecipe(recipe)} />
-          ))}
-          <View style={{ height: 30 }} />
-        </ScrollView>
+          keyboardDismissMode="on-drag"
+          renderItem={({ item }) => (
+            <RecipeCard recipe={item} width={CARD_WIDTH} onPress={() => goToRecipe(item)} />
+          )}
+        />
       )}
     </View>
   );
@@ -256,44 +203,30 @@ export default function ExploreScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
-  header: { paddingHorizontal: 20, paddingBottom: 14, backgroundColor: '#FFFFFF' },
+  header: { paddingHorizontal: 20, paddingBottom: 10, backgroundColor: '#FFFFFF' },
   title: { fontSize: 32, fontWeight: '900', color: TEXT_DARK, letterSpacing: -1, marginBottom: 14 },
   searchBar: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     backgroundColor: '#F5F5F5',
     paddingHorizontal: 14, paddingVertical: 10,
-    borderRadius: 100, marginBottom: 14,
+    borderRadius: 100,
   },
   searchInput: { flex: 1, fontSize: 14, color: TEXT_DARK, padding: 0 },
   clearBtn: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#C7C7C7', alignItems: 'center', justifyContent: 'center' },
-  catsContent: { gap: 8, paddingRight: 12 },
+  catsBar: { flexGrow: 0, borderBottomWidth: 1, borderBottomColor: BORDER },
+  catsContent: { gap: 8, paddingHorizontal: 20, paddingTop: 4, paddingBottom: 12 },
   cat: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
-    paddingHorizontal: 14, paddingVertical: 7,
+    paddingHorizontal: 14, height: 34,
     borderRadius: 100, backgroundColor: '#F5F5F5',
   },
   catActive: { backgroundColor: ACCENT },
   catText: { fontSize: 13, fontWeight: '600', color: TEXT_DARK },
   catTextActive: { color: '#FFFFFF', fontWeight: '700' },
-  divider: { height: 1, backgroundColor: BORDER },
   loadingBox: { paddingVertical: 60, alignItems: 'center' },
   emptyBox: { paddingVertical: 60, alignItems: 'center', paddingHorizontal: 30 },
   emptyTitle: { fontSize: 16, fontWeight: '800', color: TEXT_DARK, marginBottom: 6 },
   emptySub: { fontSize: 13, color: TEXT_GRAY, textAlign: 'center' },
-  list: { flex: 1 },
-  listContent: { paddingHorizontal: 16, paddingTop: 16 },
-  card: {
-    flexDirection: 'row', backgroundColor: '#FFFFFF',
-    borderRadius: 16, overflow: 'hidden', marginBottom: 14,
-    borderWidth: 1, borderColor: BORDER,
-  },
-  thumbWrap: { width: 100, height: 100, position: 'relative', backgroundColor: '#F5F5F5' },
-  thumb: { width: 100, height: 100 },
-  thumbSpinner: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
-  cardBody: { flex: 1, padding: 12, justifyContent: 'center' },
-  cardCreator: { fontSize: 11, fontWeight: '700', color: TEXT_GRAY, marginBottom: 3, letterSpacing: 0.2, textTransform: 'uppercase' },
-  cardTitle: { fontSize: 15, fontWeight: '800', color: TEXT_DARK, letterSpacing: -0.3, lineHeight: 19, marginBottom: 6 },
-  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  metaText: { fontSize: 12, color: TEXT_GRAY, fontWeight: '500' },
-  metaDot: { width: 3, height: 3, borderRadius: 1.5, backgroundColor: TEXT_LIGHT },
+  listContent: { paddingHorizontal: H_PADDING, paddingTop: 14, paddingBottom: 120 },
+  row: { gap: COL_GAP, marginBottom: 18 },
 });

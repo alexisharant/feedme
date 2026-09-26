@@ -11,7 +11,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import { cartStore, getDefaultPeople, useCart } from '../../lib/cartStore';
-import { Ingredient, formatAmount } from '../../lib/supabase';
+import { isRecipeSaved, saveRecipe, unsaveRecipe } from '../../lib/saves';
+import { Ingredient, formatAmount, getCurrentUserId } from '../../lib/supabase';
 
 const ACCENT = '#00C896';
 const ACCENT_BG = '#E8FBF5';
@@ -187,6 +188,30 @@ export default function RecipeScreen() {
   const basePeople = basePeopleParam > 0 ? basePeopleParam : parseBasePeople(people);
   const [currentPeople, setCurrentPeople] = useState(basePeople);
   const cart = useCart();
+  const [isSaved, setIsSaved] = useState(false);
+
+  useEffect(() => {
+    if (!recipeId) return;
+    (async () => {
+      const uid = await getCurrentUserId();
+      if (uid) setIsSaved(await isRecipeSaved(uid, recipeId));
+    })();
+  }, [recipeId]);
+
+  const toggleSave = async () => {
+    if (!recipeId) return;
+    const uid = await getCurrentUserId();
+    if (!uid) {
+      haptic('light');
+      router.push('/(modals)/signup' as any);
+      return;
+    }
+    const was = isSaved;
+    haptic(was ? 'light' : 'medium');
+    setIsSaved(!was);
+    const ok = was ? await unsaveRecipe(uid, recipeId) : await saveRecipe(uid, recipeId);
+    if (!ok) setIsSaved(was);
+  };
   const cartItem = recipeId ? cart.find(i => i.recipeId === recipeId) || null : null;
   const inCart = !!cartItem;
   const cartUpToDate = inCart && cartItem!.currentPeople === currentPeople;
@@ -291,6 +316,17 @@ export default function RecipeScreen() {
           >
             <IconBack />
           </TouchableOpacity>
+          {!!recipeId && (
+            <TouchableOpacity
+              style={[styles.saveBtn, { top: insets.top + 12 }, isSaved && styles.saveBtnActive]}
+              onPress={toggleSave}
+              activeOpacity={0.7}
+            >
+              <Svg width={18} height={18} viewBox="0 0 24 24" fill={isSaved ? '#FFFFFF' : 'none'}>
+                <Path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z" stroke={isSaved ? '#FFFFFF' : TEXT_DARK} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              </Svg>
+            </TouchableOpacity>
+          )}
         </View>
 
         <View style={styles.content}>
@@ -399,6 +435,13 @@ const styles = StyleSheet.create({
   videoPauseOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.15)' },
   imgPlaceholder: { width: '100%', height: '100%', backgroundColor: '#F5F5F5' },
   imgSpinner: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
+  saveBtn: {
+    position: 'absolute', right: 16,
+    width: 38, height: 38, borderRadius: 19, backgroundColor: '#FFFFFF',
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 4, elevation: 3,
+  },
+  saveBtnActive: { backgroundColor: ACCENT },
   backBtn: {
     position: 'absolute', left: 16,
     width: 38, height: 38, borderRadius: 19, backgroundColor: '#FFFFFF',

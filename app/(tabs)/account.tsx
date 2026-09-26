@@ -9,6 +9,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { isAdmin } from '../../lib/admin';
+import { countSaved } from '../../lib/saves';
 import { getDeviceId, migrateDeviceLikesToUser, supabase } from '../../lib/supabase';
 
 const ACCENT = '#00C896';
@@ -82,6 +83,12 @@ const IconLogout = ({ color = '#FF3B5C', size = 18 }) => (
   </Svg>
 );
 
+const IconBookmark = ({ color = '#00C896', size = 18 }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+  </Svg>
+);
+
 export default function AccountScreen() {
   const insets = useSafeAreaInsets();
   const [supermarche, setSupermarche] = useState('leclerc');
@@ -117,21 +124,7 @@ export default function AccountScreen() {
     const sm = await AsyncStorage.getItem('supermarche');
     if (sm) setSupermarche(sm);
 
-    if (u) {
-      const { data: likesData } = await supabase
-        .from('likes')
-        .select('recipe_id')
-        .eq('user_id', u.id);
-      setFavCount(likesData?.length || 0);
-    } else {
-      const deviceId = await getDeviceId();
-      const { data: likesData } = await supabase
-        .from('likes')
-        .select('recipe_id')
-        .eq('device_id', deviceId)
-        .is('user_id', null);
-      setFavCount(likesData?.length || 0);
-    }
+    setFavCount(u ? await countSaved(u.id) : 0);
 
     const savedNotifs = await AsyncStorage.getItem('notifs');
     if (savedNotifs !== null) setNotifs(savedNotifs === 'true');
@@ -284,11 +277,11 @@ export default function AccountScreen() {
         <Text style={styles.sectionTitle}>Mes recettes</Text>
         <TouchableOpacity style={styles.row} onPress={goToFavorites} activeOpacity={0.7}>
           <View style={styles.rowLeft}>
-            <View style={styles.rowIcon}><IconHeart color={ACCENT} size={18} /></View>
+            <View style={styles.rowIcon}><IconBookmark color={ACCENT} size={18} /></View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.rowLabel}>Mes favoris</Text>
+              <Text style={styles.rowLabel}>Recettes enregistrées</Text>
               <Text style={styles.rowValue}>
-                {favCount === 0 ? 'Aucun favori' : favCount === 1 ? '1 recette' : `${favCount} recettes`}
+                {favCount === 0 ? 'Aucune recette' : favCount === 1 ? '1 recette' : `${favCount} recettes`}
               </Text>
             </View>
           </View>
