@@ -1,8 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
+  Dimensions,
   Image, ScrollView, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -70,9 +71,19 @@ const BUDGETS = [
 
 const TOTAL_STEPS = 4;
 
+const INTRO_WIDTH = Dimensions.get('window').width;
+const INTRO_SLIDES = [
+  { emoji: '🎬', title: 'Des recettes qui donnent faim', text: 'Scrolle des vidéos de cuisine des meilleurs créateurs, comme sur TikTok.' },
+  { emoji: '🛒', title: 'La vidéo devient ta liste de courses', text: 'Choisis pour combien de personnes : les quantités sont recalculées et ajoutées à ton panier.' },
+  { emoji: '🏪', title: 'Tes courses en un tap', text: 'Commande chez ton supermarché préféré ou partage ta liste à qui tu veux.' },
+];
+
 export default function OnboardingScreen() {
   const insets = useSafeAreaInsets();
   const [step, setStep] = useState(1);
+  const [introDone, setIntroDone] = useState(false);
+  const [introIndex, setIntroIndex] = useState(0);
+  const introRef = useRef<ScrollView>(null);
   const [supermarche, setSupermarche] = useState<string | null>(null);
   const [diet, setDiet] = useState<string | null>(null);
   const [people, setPeople] = useState<string | null>(null);
@@ -108,6 +119,64 @@ export default function OnboardingScreen() {
   };
 
   const progressPct = (step / TOTAL_STEPS) * 100;
+
+  // ---------- Écrans de présentation (avant les questions) ----------
+  const goIntro = (i: number) => {
+    haptic();
+    introRef.current?.scrollTo({ x: i * INTRO_WIDTH, animated: true });
+    setIntroIndex(i);
+  };
+  const finishIntro = () => { haptic(); setIntroDone(true); };
+
+  if (!introDone) {
+    const last = introIndex === INTRO_SLIDES.length - 1;
+    return (
+      <View style={styles.introContainer}>
+        <View style={[styles.introTop, { paddingTop: insets.top + 14 }]}>
+          <Text style={styles.introLogo}>Feed<Text style={{ color: ACCENT }}>Me</Text></Text>
+          {!last && (
+            <TouchableOpacity onPress={finishIntro} hitSlop={10}>
+              <Text style={styles.introSkip}>Passer</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        <ScrollView
+          ref={introRef}
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          onMomentumScrollEnd={(e) => setIntroIndex(Math.round(e.nativeEvent.contentOffset.x / INTRO_WIDTH))}
+          style={{ flex: 1 }}
+        >
+          {INTRO_SLIDES.map((sl) => (
+            <View key={sl.title} style={[styles.introSlide, { width: INTRO_WIDTH }]}>
+              <View style={styles.introBadge}>
+                <Text style={styles.introEmoji}>{sl.emoji}</Text>
+              </View>
+              <Text style={styles.introTitle}>{sl.title}</Text>
+              <Text style={styles.introText}>{sl.text}</Text>
+            </View>
+          ))}
+        </ScrollView>
+
+        <View style={[styles.introBottom, { paddingBottom: insets.bottom + 16 }]}>
+          <View style={styles.introDots}>
+            {INTRO_SLIDES.map((_, i) => (
+              <View key={i} style={[styles.introDot, i === introIndex && styles.introDotActive]} />
+            ))}
+          </View>
+          <TouchableOpacity
+            style={styles.introBtn}
+            onPress={() => (last ? finishIntro() : goIntro(introIndex + 1))}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.introBtnText}>{last ? "C'est parti !" : 'Suivant'}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -266,6 +335,22 @@ export default function OnboardingScreen() {
 }
 
 const styles = StyleSheet.create({
+  introContainer: { flex: 1, backgroundColor: '#0A0A0A' },
+  introTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 24 },
+  introLogo: { fontSize: 24, fontWeight: '900', color: '#FFFFFF', letterSpacing: -0.6 },
+  introSkip: { fontSize: 14, fontWeight: '700', color: 'rgba(255,255,255,0.6)' },
+  introSlide: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 36 },
+  introBadge: { width: 150, height: 150, borderRadius: 75, backgroundColor: 'rgba(0,200,150,0.14)', borderWidth: 2, borderColor: 'rgba(0,200,150,0.5)', alignItems: 'center', justifyContent: 'center', marginBottom: 36 },
+  introEmoji: { fontSize: 64 },
+  introTitle: { fontSize: 30, fontWeight: '900', color: '#FFFFFF', textAlign: 'center', letterSpacing: -1, lineHeight: 34, marginBottom: 14 },
+  introText: { fontSize: 16, color: 'rgba(255,255,255,0.7)', textAlign: 'center', lineHeight: 23 },
+  introBottom: { paddingHorizontal: 24 },
+  introDots: { flexDirection: 'row', justifyContent: 'center', gap: 6, marginBottom: 20 },
+  introDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.25)' },
+  introDotActive: { width: 22, backgroundColor: ACCENT },
+  introBtn: { backgroundColor: ACCENT, borderRadius: 100, height: 56, alignItems: 'center', justifyContent: 'center' },
+  introBtnText: { fontSize: 17, fontWeight: '900', color: '#FFFFFF' },
+
   container: { flex: 1, backgroundColor: '#FFFFFF' },
   header: { paddingHorizontal: 16, paddingBottom: 16 },
   headerTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },

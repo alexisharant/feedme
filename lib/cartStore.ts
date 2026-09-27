@@ -11,6 +11,7 @@ export type CartItem = {
 };
 
 const CART_STORAGE_KEY = 'cart_persistent_v2';
+const CHECKED_STORAGE_KEY = 'cart_checked_v1';
 const MIN_PEOPLE = 1;
 const MAX_PEOPLE = 20;
 
@@ -99,6 +100,7 @@ export const cartStore = {
   clear: async () => {
     await loadCart();
     commit([]);
+    commitChecked({});
   },
 };
 
@@ -135,3 +137,61 @@ export const consolidateCart = (items: CartItem[]): Ingredient[] => {
   });
   return Array.from(map.values());
 };
+
+// ---- Liste de courses : ingrédients cochés (« déjà pris ») ----
+
+export const ingredientKey = (ing: Ingredient) =>
+  `${ing.name.trim().toLowerCase()}__${(ing.unit || '').trim().toLowerCase()}`;
+
+let checked: { [key: string]: boolean } = {};
+let checkedLoad: Promise<void> | null = null;
+const checkedListeners = new Set<(c: { [key: string]: boolean }) => void>();
+
+const commitChecked = (next: { [key: string]: boolean }) => {
+  checked = next;
+  checkedListeners.forEach((l) => l(checked));
+  AsyncStorage.setItem(CHECKED_STORAGE_KEY, JSON.stringify(checked)).catch(() => {});
+};
+
+const loadChecked = (): Promise<void> => {
+  if (!checkedLoad) {
+    checkedLoad = (async () => {
+      try {
+        const saved = await AsyncStorage.getItem(CHECKED_STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed && typeof parsed === 'object') checked = parsed;
+        }
+      } catch (e) {}
+      checkedListeners.forEach((l) => l(checked));
+    })();
+  }
+  return checkedLoad;
+};
+
+export const toggleChecked = async (key: string) => {
+  await loadChecked();
+  const next = { ...checked };
+  if (next[key]) delete next[key];
+  else next[key] = true;
+  commitChecked(next);
+};
+
+export const clearChecked = async () => {
+  await loadChecked();
+  commitChecked({});
+};
+
+export function useCartChecked(): { [key: string]: boolean } {
+  const [state, setState] = useState(checked);
+  useEffect(() => {
+    const listener = (c: { [key: string]: boolean }) => setState(c);
+    checkedListeners.add(listener);
+    loadChecked();
+    setState(checked);
+    return () => {
+      checkedListeners.delete(listener);
+    };
+  }, []);
+  return state;
+}

@@ -5,7 +5,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Animated, Easing, Image, Linking, Pressable, ScrollView, StyleSheet,
+  Animated, Dimensions, Easing, Image, Linking, Pressable, StyleSheet,
   Text, TouchableOpacity, View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -128,45 +128,8 @@ const safeParseIngredients = (raw: any): Ingredient[] => {
   }
 };
 
-const RecipeVideo = ({ uri, poster }: { uri: string; poster: string }) => {
-  const player = useVideoPlayer(uri, (p) => {
-    p.loop = true;
-    p.play();
-  });
-  const { isPlaying } = useEvent(player, 'playingChange', { isPlaying: player.playing });
-  const { status } = useEvent(player, 'statusChange', { status: player.status });
-
-  const togglePlay = () => {
-    haptic('light');
-    try {
-      if (player.playing) player.pause();
-      else player.play();
-    } catch (e) {}
-  };
-
-  return (
-    <Pressable style={StyleSheet.absoluteFill} onPress={togglePlay}>
-      <View style={StyleSheet.absoluteFill} pointerEvents="none">
-        <VideoView player={player} style={StyleSheet.absoluteFill} contentFit="cover" nativeControls={false} />
-        {status !== 'readyToPlay' && !!poster && (
-          <Image source={{ uri: poster }} style={StyleSheet.absoluteFill} />
-        )}
-        {status === 'loading' && (
-          <View style={styles.imgSpinner}>
-            <Spinner size={36} />
-          </View>
-        )}
-        {status === 'readyToPlay' && !isPlaying && (
-          <View style={styles.videoPauseOverlay}>
-            <Svg width={64} height={64} viewBox="0 0 24 24" fill="rgba(255,255,255,0.95)">
-              <Path d="M8 5v14l11-7z" />
-            </Svg>
-          </View>
-        )}
-      </View>
-    </Pressable>
-  );
-};
+const SCREEN_HEIGHT = Dimensions.get('screen').height;
+const SHEET_PEEK = 150; // hauteur de la fiche visible quand elle est repliée (créateur + titre)
 
 export default function RecipeScreen() {
   const insets = useSafeAreaInsets();
@@ -292,45 +255,117 @@ export default function RecipeScreen() {
 
   const smName = SUPERMARCHES[supermarche]?.name || 'Leclerc';
 
+  // ---- Vidéo plein écran en fond + fiche qui glisse par-dessus ----
+  const player = useVideoPlayer(videoUrl || null, (p) => {
+    p.loop = true;
+    if (videoUrl) p.play();
+  });
+  const { isPlaying } = useEvent(player, 'playingChange', { isPlaying: player.playing });
+  const { status } = useEvent(player, 'statusChange', { status: player.status });
+
+  const togglePlay = () => {
+    if (!videoUrl) return;
+    haptic('light');
+    try {
+      if (player.playing) player.pause();
+      else player.play();
+    } catch (e) {}
+  };
+
+  const bottomBarHeight = insets.bottom + (recipeId ? 132 : 80);
+  // Fiche repliée : seul le haut (créateur + titre) dépasse en bas, la vidéo est visible en entier.
+  // Fiche dépliée : la recette recouvre la vidéo et les boutons panier/commande apparaissent.
+  const sheetTop = Math.max(260, SCREEN_HEIGHT - insets.bottom - SHEET_PEEK);
+  // Position « dépliée » : la fiche s'arrête sous l'heure / la batterie et les boutons retour / enregistrer.
+  const sheetOpenOffset = Math.max(0, sheetTop - (insets.top + 60));
+  const scrollY = useRef(new Animated.Value(0)).current;
+  const scrollRef = useRef<any>(null);
+  const [expanded, setExpanded] = useState(false);
+  const expandedRef = useRef(false);
+
+  const onScrollListener = (e: any) => {
+    const isOpen = e.nativeEvent.contentOffset.y > sheetOpenOffset * 0.5;
+    if (isOpen !== expandedRef.current) {
+      expandedRef.current = isOpen;
+      setExpanded(isOpen);
+    }
+  };
+
+  const toggleSheet = () => {
+    haptic('light');
+    scrollRef.current?.scrollTo({ y: expandedRef.current ? 0 : sheetOpenOffset, animated: true });
+  };
+
+  const bottomBarStyle = {
+    transform: [{
+      translateY: scrollY.interpolate({
+        inputRange: [sheetOpenOffset * 0.4, sheetOpenOffset],
+        outputRange: [bottomBarHeight + 40, 0],
+        extrapolate: 'clamp' as const,
+      }),
+    }],
+  };
+
+  const mediaStyle = {
+    transform: [
+      { translateY: scrollY.interpolate({ inputRange: [-200, 0, sheetTop], outputRange: [0, 0, -sheetTop * 0.25], extrapolate: 'clamp' as const }) },
+      { scale: scrollY.interpolate({ inputRange: [-200, 0], outputRange: [1.15, 1], extrapolate: 'clamp' as const }) },
+    ],
+  };
+  const dimOpacity = scrollY.interpolate({ inputRange: [0, sheetTop], outputRange: [0, 0.65], extrapolate: 'clamp' });
+
   return (
     <View style={styles.container}>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 190 }}>
-        <View style={[styles.imgWrap, !!videoUrl && styles.videoWrap]}>
-          {videoUrl ? (
-            <RecipeVideo uri={videoUrl} poster={thumbnail} />
-          ) : thumbnail ? (
-            <>
-              <Image source={{ uri: thumbnail }} style={styles.img} onLoadEnd={() => setImgLoading(false)} />
-              {imgLoading && (
-                <View style={styles.imgSpinner}>
-                  <Spinner size={36} />
-                </View>
-              )}
-            </>
-          ) : (
-            <View style={styles.imgPlaceholder} />
-          )}
-          <TouchableOpacity
-            style={[styles.backBtn, { top: insets.top + 12 }]}
-            onPress={() => router.back()} activeOpacity={0.7}
-          >
-            <IconBack />
-          </TouchableOpacity>
-          {!!recipeId && (
-            <TouchableOpacity
-              style={[styles.saveBtn, { top: insets.top + 12 }, isSaved && styles.saveBtnActive]}
-              onPress={toggleSave}
-              activeOpacity={0.7}
-            >
-              <Svg width={18} height={18} viewBox="0 0 24 24" fill={isSaved ? '#FFFFFF' : 'none'}>
-                <Path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z" stroke={isSaved ? '#FFFFFF' : TEXT_DARK} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      <Animated.View style={[StyleSheet.absoluteFill, mediaStyle]}>
+        {videoUrl ? (
+          <VideoView player={player} style={StyleSheet.absoluteFill} contentFit="cover" nativeControls={false} />
+        ) : null}
+        {(!videoUrl || status !== 'readyToPlay') && !!thumbnail && (
+          <Image source={{ uri: thumbnail }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+        )}
+        {!!videoUrl && status === 'loading' && (
+          <View style={[styles.imgSpinner, { bottom: SCREEN_HEIGHT - sheetTop }]}>
+            <Spinner size={36} />
+          </View>
+        )}
+        {!!videoUrl && status === 'readyToPlay' && !isPlaying && (
+          <View style={[styles.videoPauseOverlay, { bottom: SCREEN_HEIGHT - sheetTop }]} pointerEvents="none">
+            <Svg width={64} height={64} viewBox="0 0 24 24" fill="rgba(255,255,255,0.95)">
+              <Path d="M8 5v14l11-7z" />
+            </Svg>
+          </View>
+        )}
+        <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: '#000', opacity: dimOpacity }]} />
+      </Animated.View>
+
+      <Animated.ScrollView
+        ref={scrollRef}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: bottomBarHeight + 20 }}
+        scrollEventThrottle={16}
+        snapToOffsets={[0, sheetOpenOffset]}
+        snapToStart
+        snapToEnd={false}
+        decelerationRate="fast"
+        onScroll={Animated.event(
+          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+          { useNativeDriver: true, listener: onScrollListener },
+        )}
+      >
+        <Pressable style={{ height: sheetTop }} onPress={togglePlay} />
+        <View style={[styles.sheet, { minHeight: SCREEN_HEIGHT - insets.top - 60 }]}>
+          <Pressable onPress={toggleSheet} hitSlop={12} style={styles.sheetHandleZone}>
+            <View style={styles.sheetHandle} />
+          </Pressable>
+          <View style={styles.peekRow}>
+            <Text style={[styles.creator, { flex: 1, marginBottom: 0 }]} numberOfLines={1}>{creator}</Text>
+            <TouchableOpacity style={styles.peekBtn} onPress={toggleSheet} activeOpacity={0.8}>
+              <Text style={styles.peekBtnText}>{expanded ? 'Voir la vidéo' : `Recette · ${ingredients.length} ingrédients`}</Text>
+              <Svg width={12} height={12} viewBox="0 0 24 24" fill="none" style={{ transform: [{ rotate: expanded ? '180deg' : '0deg' }] }}>
+                <Path d="M6 15l6-6 6 6" stroke="#FFFFFF" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
               </Svg>
             </TouchableOpacity>
-          )}
-        </View>
-
-        <View style={styles.content}>
-          <Text style={styles.creator}>{creator}</Text>
+          </View>
           <Text style={styles.title}>{title}</Text>
 
           <View style={styles.pills}>
@@ -401,9 +436,30 @@ export default function RecipeScreen() {
             })}
           </View>
         </View>
-      </ScrollView>
+      </Animated.ScrollView>
 
-      <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 12 }]}>
+      <TouchableOpacity
+        style={[styles.backBtn, { top: insets.top + 12 }]}
+        onPress={() => router.back()} activeOpacity={0.7}
+      >
+        <IconBack />
+      </TouchableOpacity>
+      {!!recipeId && (
+        <TouchableOpacity
+          style={[styles.saveBtn, { top: insets.top + 12 }, isSaved && styles.saveBtnActive]}
+          onPress={toggleSave}
+          activeOpacity={0.7}
+        >
+          <Svg width={18} height={18} viewBox="0 0 24 24" fill={isSaved ? '#FFFFFF' : 'none'}>
+            <Path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z" stroke={isSaved ? '#FFFFFF' : TEXT_DARK} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </Svg>
+        </TouchableOpacity>
+      )}
+
+      <Animated.View
+        pointerEvents={expanded ? 'auto' : 'none'}
+        style={[styles.bottomBar, { paddingBottom: insets.bottom + 12 }, bottomBarStyle]}
+      >
         {!!recipeId && (
           <TouchableOpacity
             style={[styles.checkoutBtn, cartUpToDate && styles.cartBtnDone]}
@@ -422,13 +478,27 @@ export default function RecipeScreen() {
           {!recipeId && <IconCart />}
           <Text style={recipeId ? styles.secondaryBtnText : styles.checkoutBtnText}>Commander chez {smName}</Text>
         </TouchableOpacity>
-      </View>
+      </Animated.View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFFFFF' },
+  container: { flex: 1, backgroundColor: '#000000' },
+  sheet: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 26, borderTopRightRadius: 26,
+    paddingHorizontal: 20, paddingTop: 10,
+    shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.18, shadowRadius: 12, elevation: 12,
+  },
+  sheetHandleZone: { alignSelf: 'stretch', alignItems: 'center', paddingBottom: 12 },
+  sheetHandle: { width: 40, height: 5, borderRadius: 3, backgroundColor: '#E0E0E0' },
+  peekRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 6 },
+  peekBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: ACCENT, borderRadius: 100, paddingHorizontal: 12, paddingVertical: 7,
+  },
+  peekBtnText: { fontSize: 12, fontWeight: '800', color: '#FFFFFF' },
   imgWrap: { width: '100%', height: 300, position: 'relative', backgroundColor: '#F5F5F5' },
   img: { width: '100%', height: '100%' },
   videoWrap: { height: 480, backgroundColor: '#000' },

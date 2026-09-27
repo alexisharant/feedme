@@ -1,61 +1,61 @@
 import * as Haptics from 'expo-haptics';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Animated, Easing, Image, Linking, ScrollView, StyleSheet,
+  Animated, Dimensions, Easing, FlatList, Linking, StyleSheet,
   Text, TouchableOpacity, View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Path } from 'react-native-svg';
+import Svg, { Path, Rect } from 'react-native-svg';
+import { Image } from 'expo-image';
+import { formatCount, RecipeGridTile } from '../../components/RecipeTile';
+import { openRecipe } from '../../lib/openRecipe';
 import { DbRecipe, supabase } from '../../lib/supabase';
+
+// Profil créateur façon TikTok : en-tête (avatar, stats, réseaux) + grille 3 colonnes.
 
 const ACCENT = '#00C896';
 const TEXT_DARK = '#000000';
 const TEXT_GRAY = '#8E8E8E';
-const TEXT_LIGHT = '#BDBDBD';
 const BORDER = '#EFEFEF';
-const HEART = '#FF3B5C';
+
+const GAP = 2;
+const COLS = 3;
+const SCREEN_WIDTH = Dimensions.get('window').width;
+const TILE_WIDTH = Math.floor((SCREEN_WIDTH - GAP * (COLS - 1)) / COLS);
 
 const haptic = () => {
   try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch (e) {}
 };
 
-const formatLikes = (n: number): string => {
-  if (n >= 1000000) return (n / 1000000).toFixed(1).replace('.0', '') + 'M';
-  if (n >= 1000) return (n / 1000).toFixed(1).replace('.0', '') + 'k';
-  return n.toString();
-};
-
-const Spinner = ({ size = 30, color = ACCENT, baseColor = '#F0F0F0' }: { size?: number; color?: string; baseColor?: string }) => {
-  const rotate = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.timing(rotate, { toValue: 1, duration: 800, easing: Easing.linear, useNativeDriver: true })
-    );
-    loop.start();
-    return () => loop.stop();
-  }, []);
-  return (
-    <Animated.View
-      style={{
-        width: size, height: size,
-        borderWidth: 3, borderRadius: size / 2,
-        borderColor: baseColor, borderTopColor: color,
-        transform: [{ rotate: rotate.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) }],
-      }}
-    />
-  );
+type Creator = {
+  id: string; handle: string; name: string;
+  avatar_letters: string; avatar_color: string;
+  avatar_url?: string | null;
+  bio: string | null;
+  is_partner?: boolean;
+  tiktok_url: string | null; instagram_url: string | null;
+  tiktok_followers: string | null; instagram_followers: string | null;
 };
 
 const IconBack = ({ color = TEXT_DARK, size = 20 }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-    <Path d="M19 12H5M12 19l-7-7 7-7" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+    <Path d="M15 18l-6-6 6-6" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
   </Svg>
 );
 
-const IconHeart = ({ color = HEART, size = 11 }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
-    <Path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/>
+const IconCheck = ({ color = '#FFFFFF', size = 12 }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Path d="M5 13l4 4L19 7" stroke={color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
+  </Svg>
+);
+
+const IconGrid = ({ color = TEXT_DARK, size = 18 }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Rect x="3" y="3" width="7" height="7" rx="1" stroke={color} strokeWidth="2"/>
+    <Rect x="14" y="3" width="7" height="7" rx="1" stroke={color} strokeWidth="2"/>
+    <Rect x="3" y="14" width="7" height="7" rx="1" stroke={color} strokeWidth="2"/>
+    <Rect x="14" y="14" width="7" height="7" rx="1" stroke={color} strokeWidth="2"/>
   </Svg>
 );
 
@@ -73,13 +73,32 @@ const IconInsta = ({ color = TEXT_DARK, size = 16 }) => (
   </Svg>
 );
 
-type Creator = {
-  id: string; handle: string; name: string;
-  avatar_letters: string; avatar_color: string;
-  bio: string | null;
-  tiktok_url: string | null; instagram_url: string | null;
-  tiktok_followers: string | null; instagram_followers: string | null;
+const Spinner = ({ size = 30, color = ACCENT, baseColor = '#F0F0F0' }: { size?: number; color?: string; baseColor?: string }) => {
+  const rotate = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.timing(rotate, { toValue: 1, duration: 800, easing: Easing.linear, useNativeDriver: true })
+    );
+    loop.start();
+    return () => loop.stop();
+  }, []);
+  return (
+    <Animated.View
+      style={{
+        width: size, height: size, borderWidth: 3, borderRadius: size / 2,
+        borderColor: baseColor, borderTopColor: color,
+        transform: [{ rotate: rotate.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) }],
+      }}
+    />
+  );
 };
+
+const Stat = ({ value, label }: { value: string; label: string }) => (
+  <View style={styles.stat}>
+    <Text style={styles.statVal}>{value}</Text>
+    <Text style={styles.statLabel}>{label}</Text>
+  </View>
+);
 
 export default function CreatorProfileScreen() {
   const insets = useSafeAreaInsets();
@@ -89,7 +108,6 @@ export default function CreatorProfileScreen() {
   const [creator, setCreator] = useState<Creator | null>(null);
   const [recipes, setRecipes] = useState<DbRecipe[]>([]);
   const [loading, setLoading] = useState(true);
-  const [thumbLoading, setThumbLoading] = useState<{ [key: string]: boolean }>({});
 
   const loadData = async () => {
     if (!creatorId) { setLoading(false); return; }
@@ -99,202 +117,179 @@ export default function CreatorProfileScreen() {
       .from('recipes').select('*')
       .eq('creator_id', creatorId)
       .eq('status', 'approved')
-      .order('likes_count', { ascending: false });
-    if (recipesData) {
-      setRecipes(recipesData as DbRecipe[]);
-      const loadMap: { [key: string]: boolean } = {};
-      recipesData.forEach((r: any) => { loadMap[r.id] = true; });
-      setThumbLoading(loadMap);
-    }
+      .order('created_at', { ascending: false });
+    if (recipesData) setRecipes(recipesData as DbRecipe[]);
     setLoading(false);
   };
 
   useFocusEffect(useCallback(() => { loadData(); }, [creatorId]));
 
-  const openRecipe = (recipe: DbRecipe) => {
-    haptic();
-    router.push({
-      pathname: '/(modals)/recipe' as any,
-      params: {
-        id: recipe.id,
-        videoUrl: recipe.video_url || '',
-        basePeople: String(recipe.base_people || ''),
-        title: recipe.title, creator: creator?.name || '',
-        time: recipe.time, people: recipe.people, price: recipe.price,
-        thumbnail: recipe.thumbnail_url,
-        ingredients: JSON.stringify(recipe.ingredients),
-        instaUrl: recipe.insta_url || '',
-      },
-    });
-  };
+  const totalLikes = useMemo(
+    () => recipes.reduce((sum, r) => sum + (r.likes_count || 0), 0),
+    [recipes],
+  );
 
-  const openTikTok = () => { haptic(); if (creator?.tiktok_url) Linking.openURL(creator.tiktok_url).catch(() => {}); };
-  const openInstagram = () => { haptic(); if (creator?.instagram_url) Linking.openURL(creator.instagram_url).catch(() => {}); };
+  const openLink = (url: string | null) => {
+    if (!url) return;
+    haptic();
+    Linking.openURL(url).catch(() => {});
+  };
 
   if (loading) {
     return (
-      <View style={styles.loadingContainer}>
-        <Spinner size={36} color={ACCENT} baseColor="#F0F0F0" />
+      <View style={styles.center}>
+        <Spinner size={36} />
       </View>
     );
   }
 
   if (!creator) {
     return (
-      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center', padding: 32 }]}>
+      <View style={[styles.center, { padding: 32 }]}>
         <Text style={styles.errorText}>Créateur introuvable</Text>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backButtonError}>
-          <Text style={styles.backButtonErrorText}>Retour</Text>
+        <TouchableOpacity onPress={() => router.back()} style={styles.errorBtn}>
+          <Text style={styles.errorBtnText}>Retour</Text>
         </TouchableOpacity>
       </View>
     );
   }
 
-  return (
-    <View style={styles.container}>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 30 }}>
-        <View style={[styles.headerBar, { paddingTop: insets.top + 12 }]}>
-          <TouchableOpacity style={styles.backBtn} onPress={() => router.back()} activeOpacity={0.7}>
-            <IconBack color={TEXT_DARK} size={20} />
-          </TouchableOpacity>
+  const followers = creator.tiktok_followers || creator.instagram_followers;
+
+  const Header = (
+    <View>
+      <View style={styles.hero}>
+        <View style={styles.avatarWrap}>
+          <View style={[styles.avatar, { backgroundColor: creator.avatar_color || ACCENT }]}>
+            {creator.avatar_url ? (
+              <Image source={{ uri: creator.avatar_url }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" />
+            ) : (
+              <Text style={styles.avatarText}>{creator.avatar_letters}</Text>
+            )}
+          </View>
+          {creator.is_partner && (
+            <View style={styles.verified}>
+              <IconCheck size={11} />
+            </View>
+          )}
         </View>
 
-        <View style={styles.heroBlock}>
-          <View style={[styles.bigAvatar, { backgroundColor: creator.avatar_color }]}>
-            <Text style={styles.bigAvatarText}>{creator.avatar_letters}</Text>
-          </View>
-          <Text style={styles.creatorName}>{creator.name}</Text>
-          <Text style={styles.creatorHandle}>@{creator.handle}</Text>
-          {!!creator.bio && <Text style={styles.creatorBio}>{creator.bio}</Text>}
-        </View>
+        <Text style={styles.name}>{creator.name}</Text>
+        <Text style={styles.handle}>@{creator.handle}</Text>
 
         <View style={styles.statsRow}>
-          <View style={styles.statBox}>
-            <Text style={styles.statVal}>{creator.tiktok_followers || '0'}</Text>
-            <Text style={styles.statLabel}>TikTok</Text>
-          </View>
-          <View style={styles.statSeparator} />
-          <View style={styles.statBox}>
-            <Text style={styles.statVal}>{creator.instagram_followers || '0'}</Text>
-            <Text style={styles.statLabel}>Instagram</Text>
-          </View>
-          <View style={styles.statSeparator} />
-          <View style={styles.statBox}>
-            <Text style={styles.statVal}>{recipes.length}</Text>
-            <Text style={styles.statLabel}>Recettes</Text>
-          </View>
-        </View>
-
-        <View style={styles.socialRow}>
-          {!!creator.tiktok_url && (
-            <TouchableOpacity style={styles.socialBtn} onPress={openTikTok} activeOpacity={0.85}>
-              <IconTikTok color={TEXT_DARK} size={15} />
-              <Text style={styles.socialBtnText}>TikTok</Text>
-            </TouchableOpacity>
-          )}
-          {!!creator.instagram_url && (
-            <TouchableOpacity style={styles.socialBtn} onPress={openInstagram} activeOpacity={0.85}>
-              <IconInsta color={TEXT_DARK} size={15} />
-              <Text style={styles.socialBtnText}>Instagram</Text>
-            </TouchableOpacity>
+          <Stat value={String(recipes.length)} label="Recettes" />
+          <View style={styles.statSep} />
+          <Stat value={formatCount(totalLikes)} label="J'aime" />
+          {!!followers && (
+            <>
+              <View style={styles.statSep} />
+              <Stat value={followers} label="Abonnés" />
+            </>
           )}
         </View>
 
-        <View style={styles.recipesSection}>
-          <Text style={styles.sectionTitle}>Ses recettes</Text>
-          {recipes.length === 0 ? (
-            <Text style={styles.emptyRecipes}>Aucune recette publiée pour l'instant</Text>
-          ) : (
-            recipes.map((recipe) => (
-              <TouchableOpacity
-                key={recipe.id}
-                style={styles.recipeRow}
-                onPress={() => openRecipe(recipe)}
-                activeOpacity={0.8}
-              >
-                <View style={styles.thumbWrap}>
-                  <Image
-                    source={{ uri: recipe.thumbnail_url }}
-                    style={styles.thumb}
-                    onLoadEnd={() => setThumbLoading(prev => ({ ...prev, [recipe.id]: false }))}
-                  />
-                  {thumbLoading[recipe.id] && (
-                    <View style={styles.thumbSpinner}>
-                      <Spinner size={20} />
-                    </View>
-                  )}
-                </View>
-                <View style={styles.recipeBody}>
-                  <Text style={styles.recipeName} numberOfLines={2}>{recipe.title}</Text>
-                  <View style={styles.metaRow}>
-                    <Text style={styles.metaText}>{recipe.time}</Text>
-                    <View style={styles.metaDot} />
-                    <Text style={styles.metaText}>{recipe.price}</Text>
-                    <View style={styles.metaDot} />
-                    <IconHeart color={TEXT_GRAY} size={10} />
-                    <Text style={[styles.metaText, { marginLeft: 2 }]}>{formatLikes(recipe.likes_count)}</Text>
-                  </View>
-                </View>
+        {!!creator.bio && <Text style={styles.bio}>{creator.bio}</Text>}
+
+        {(!!creator.tiktok_url || !!creator.instagram_url) && (
+          <View style={styles.socialRow}>
+            {!!creator.tiktok_url && (
+              <TouchableOpacity style={styles.socialBtn} onPress={() => openLink(creator.tiktok_url)} activeOpacity={0.8}>
+                <IconTikTok size={15} />
+                <Text style={styles.socialText}>TikTok</Text>
               </TouchableOpacity>
-            ))
-          )}
+            )}
+            {!!creator.instagram_url && (
+              <TouchableOpacity style={styles.socialBtn} onPress={() => openLink(creator.instagram_url)} activeOpacity={0.8}>
+                <IconInsta size={15} />
+                <Text style={styles.socialText}>Instagram</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
+      </View>
+
+      <View style={styles.tabBar}>
+        <View style={styles.tabActive}>
+          <IconGrid size={18} />
         </View>
-      </ScrollView>
+      </View>
+    </View>
+  );
+
+  return (
+    <View style={styles.container}>
+      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
+        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()} activeOpacity={0.7}>
+          <IconBack />
+        </TouchableOpacity>
+        <Text style={styles.topTitle} numberOfLines={1}>{creator.name}</Text>
+        <View style={{ width: 38 }} />
+      </View>
+
+      <FlatList
+        data={recipes}
+        keyExtractor={(item) => item.id}
+        numColumns={COLS}
+        columnWrapperStyle={{ gap: GAP }}
+        contentContainerStyle={{ gap: GAP, paddingBottom: insets.bottom + 30 }}
+        showsVerticalScrollIndicator={false}
+        ListHeaderComponent={Header}
+        ListEmptyComponent={
+          <Text style={styles.empty}>Aucune recette publiée pour l'instant</Text>
+        }
+        renderItem={({ item }) => (
+          <RecipeGridTile
+            recipe={item}
+            width={TILE_WIDTH}
+            onPress={() => { haptic(); openRecipe(item, creator.name); }}
+          />
+        )}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
-  loadingContainer: { flex: 1, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
-  headerBar: { flexDirection: 'row', paddingHorizontal: 16, paddingBottom: 8 },
-  backBtn: {
-    width: 38, height: 38, borderRadius: 19,
-    backgroundColor: '#F5F5F5',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  heroBlock: { alignItems: 'center', paddingVertical: 12, paddingHorizontal: 20 },
-  bigAvatar: {
-    width: 92, height: 92, borderRadius: 46,
-    alignItems: 'center', justifyContent: 'center', marginBottom: 14,
-  },
-  bigAvatarText: { fontSize: 30, fontWeight: '900', color: '#FFFFFF' },
-  creatorName: { fontSize: 24, fontWeight: '900', color: TEXT_DARK, letterSpacing: -0.7 },
-  creatorHandle: { fontSize: 13, fontWeight: '700', color: ACCENT, marginTop: 2 },
-  creatorBio: { fontSize: 13, color: TEXT_GRAY, textAlign: 'center', marginTop: 10, paddingHorizontal: 24, lineHeight: 18 },
-  statsRow: {
-    flexDirection: 'row', marginHorizontal: 20, marginTop: 18, marginBottom: 14,
-    paddingVertical: 14, alignItems: 'center',
-    borderTopWidth: 1, borderBottomWidth: 1, borderColor: BORDER,
-  },
-  statBox: { flex: 1, alignItems: 'center' },
-  statVal: { fontSize: 17, fontWeight: '900', color: TEXT_DARK, letterSpacing: -0.5 },
-  statLabel: { fontSize: 10, color: TEXT_GRAY, textTransform: 'uppercase', letterSpacing: 0.8, marginTop: 3, fontWeight: '700' },
-  statSeparator: { width: 1, height: 28, backgroundColor: BORDER },
-  socialRow: { flexDirection: 'row', gap: 10, marginHorizontal: 20, marginBottom: 24 },
-  socialBtn: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
-    backgroundColor: '#F5F5F5',
-    borderRadius: 100, padding: 12,
-  },
-  socialBtnText: { fontSize: 13, fontWeight: '700', color: TEXT_DARK },
-  recipesSection: { paddingHorizontal: 16 },
-  sectionTitle: { fontSize: 11, fontWeight: '700', color: TEXT_GRAY, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12, paddingHorizontal: 4 },
-  recipeRow: {
-    backgroundColor: '#FFFFFF', borderRadius: 14, overflow: 'hidden',
-    flexDirection: 'row', alignItems: 'center',
-    borderWidth: 1, borderColor: BORDER, marginBottom: 10,
-  },
-  thumbWrap: { width: 76, height: 76, position: 'relative', backgroundColor: '#F5F5F5' },
-  thumb: { width: 76, height: 76 },
-  thumbSpinner: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
-  recipeBody: { flex: 1, padding: 12 },
-  recipeName: { fontSize: 14, fontWeight: '800', color: TEXT_DARK, letterSpacing: -0.3, lineHeight: 18, marginBottom: 5 },
-  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  metaText: { fontSize: 11, color: TEXT_GRAY, fontWeight: '500' },
-  metaDot: { width: 3, height: 3, borderRadius: 1.5, backgroundColor: TEXT_LIGHT },
-  emptyRecipes: { fontSize: 13, color: TEXT_GRAY, textAlign: 'center', paddingVertical: 24 },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF' },
   errorText: { fontSize: 16, fontWeight: '800', color: TEXT_DARK, marginBottom: 16 },
-  backButtonError: { backgroundColor: ACCENT, borderRadius: 100, paddingHorizontal: 24, paddingVertical: 12 },
-  backButtonErrorText: { fontSize: 14, fontWeight: '800', color: '#FFFFFF' },
+  errorBtn: { backgroundColor: ACCENT, borderRadius: 100, paddingHorizontal: 22, paddingVertical: 12 },
+  errorBtnText: { fontSize: 14, fontWeight: '800', color: '#FFFFFF' },
+
+  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 8 },
+  backBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#F5F5F5', alignItems: 'center', justifyContent: 'center' },
+  topTitle: { flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '800', color: TEXT_DARK, marginHorizontal: 8 },
+
+  hero: { alignItems: 'center', paddingHorizontal: 24, paddingTop: 8, paddingBottom: 18 },
+  avatarWrap: { position: 'relative', marginBottom: 12 },
+  avatar: { width: 96, height: 96, borderRadius: 48, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  avatarText: { fontSize: 32, fontWeight: '900', color: '#FFFFFF' },
+  verified: {
+    position: 'absolute', right: 2, bottom: 2,
+    width: 26, height: 26, borderRadius: 13, backgroundColor: ACCENT,
+    borderWidth: 3, borderColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center',
+  },
+  name: { fontSize: 20, fontWeight: '900', color: TEXT_DARK, letterSpacing: -0.4 },
+  handle: { fontSize: 14, fontWeight: '600', color: TEXT_GRAY, marginTop: 2 },
+
+  statsRow: { flexDirection: 'row', alignItems: 'center', marginTop: 18 },
+  stat: { alignItems: 'center', minWidth: 78 },
+  statVal: { fontSize: 18, fontWeight: '900', color: TEXT_DARK },
+  statLabel: { fontSize: 12, fontWeight: '500', color: TEXT_GRAY, marginTop: 2 },
+  statSep: { width: 1, height: 18, backgroundColor: BORDER, marginHorizontal: 6 },
+
+  bio: { fontSize: 13, color: TEXT_DARK, textAlign: 'center', lineHeight: 19, marginTop: 14 },
+
+  socialRow: { flexDirection: 'row', gap: 8, marginTop: 16 },
+  socialBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 16, height: 38, borderRadius: 8, backgroundColor: '#F2F2F2',
+  },
+  socialText: { fontSize: 13, fontWeight: '800', color: TEXT_DARK },
+
+  tabBar: { flexDirection: 'row', justifyContent: 'center', borderBottomWidth: 1, borderBottomColor: BORDER, marginBottom: GAP },
+  tabActive: { paddingVertical: 10, paddingHorizontal: 40, borderBottomWidth: 2, borderBottomColor: TEXT_DARK },
+
+  empty: { textAlign: 'center', color: TEXT_GRAY, fontSize: 13, paddingVertical: 40 },
 });

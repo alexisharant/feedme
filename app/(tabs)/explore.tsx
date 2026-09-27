@@ -87,7 +87,7 @@ export default function ExploreScreen() {
   const loadRecipes = async () => {
     const { data, error } = await supabase
       .from('recipes')
-      .select('*, creators(id, handle, name, avatar_letters, avatar_color)')
+      .select('*, creators(*)')
       .eq('status', 'approved')
       .order('created_at', { ascending: false });
     if (!error && data) setAllRecipes(data as DbRecipe[]);

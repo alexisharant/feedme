@@ -80,7 +80,7 @@ export default function SavedRecipesScreen() {
     }
     const { data, error } = await supabase
       .from('saves')
-      .select('recipe_id, created_at, recipes(*, creators(id, handle, name, avatar_letters, avatar_color))')
+      .select('recipe_id, created_at, recipes(*, creators(*))')
       .eq('user_id', uid)
       .order('created_at', { ascending: false });
     if (!error && data) {

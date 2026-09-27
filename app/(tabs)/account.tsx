@@ -3,14 +3,19 @@ import * as Haptics from 'expo-haptics';
 import { router, useFocusEffect } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Alert, Image, ScrollView, StyleSheet, Switch,
-  Text, TouchableOpacity, View,
+  Alert, Dimensions, FlatList, Image, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
+import { formatCount, RecipeGridTile } from '../../components/RecipeTile';
 import { isAdmin } from '../../lib/admin';
-import { countSaved } from '../../lib/saves';
-import { getDeviceId, migrateDeviceLikesToUser, supabase } from '../../lib/supabase';
+import { useCart } from '../../lib/cartStore';
+import { openRecipe } from '../../lib/openRecipe';
+import { unsaveRecipe } from '../../lib/saves';
+import { DbRecipe, migrateDeviceLikesToUser, supabase } from '../../lib/supabase';
+
+// Mon profil façon TikTok : avatar, chiffres, raccourcis, puis grille « Enregistrées » / « J'aime ».
+// Les réglages (supermarché, préférences, déconnexion, admin) sont dans l'écran Paramètres (roue dentée).
 
 const ACCENT = '#00C896';
 const ACCENT_BG = '#E8FBF5';
@@ -19,17 +24,33 @@ const TEXT_GRAY = '#8E8E8E';
 const TEXT_LIGHT = '#BDBDBD';
 const BORDER = '#EFEFEF';
 
-const haptic = () => {
-  try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch (e) {}
+const GAP = 2;
+const COLS = 3;
+const SCREEN_WIDTH = Dimensions.get('window').width;
+const TILE_WIDTH = Math.floor((SCREEN_WIDTH - GAP * (COLS - 1)) / COLS);
+
+const SUPERMARCHES: { [id: string]: { name: string; logo: any } } = {
+  leclerc:     { name: 'E.Leclerc',   logo: require('../../assets/images/logos/leclerc.jpg') },
+  carrefour:   { name: 'Carrefour',   logo: require('../../assets/images/logos/carrefour.png') },
+  auchan:      { name: 'Auchan',      logo: require('../../assets/images/logos/auchan.jpg') },
+  intermarche: { name: 'Intermarché', logo: require('../../assets/images/logos/intermarche.jpg') },
+  superu:      { name: 'Super U',     logo: require('../../assets/images/logos/superu.png') },
 };
 
-const SUPERMARCHES = [
-  { id: 'leclerc',     name: 'E.Leclerc',   logo: require('../../assets/images/logos/leclerc.jpg') },
-  { id: 'carrefour',   name: 'Carrefour',   logo: require('../../assets/images/logos/carrefour.png') },
-  { id: 'auchan',      name: 'Auchan',      logo: require('../../assets/images/logos/auchan.jpg') },
-  { id: 'intermarche', name: 'Intermarché', logo: require('../../assets/images/logos/intermarche.jpg') },
-  { id: 'superu',      name: 'Super U',     logo: require('../../assets/images/logos/superu.png') },
-];
+type Tab = 'saved' | 'liked';
+
+const haptic = (type: 'light' | 'medium' = 'light') => {
+  try {
+    Haptics.impactAsync(type === 'medium' ? Haptics.ImpactFeedbackStyle.Medium : Haptics.ImpactFeedbackStyle.Light);
+  } catch (e) {}
+};
+
+const IconGear = ({ color = TEXT_DARK, size = 22 }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Circle cx="12" cy="12" r="3" stroke={color} strokeWidth="1.9" fill="none"/>
+    <Path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" stroke={color} strokeWidth="1.9" fill="none"/>
+  </Svg>
+);
 
 const IconUser = ({ color = '#FFFFFF', size = 32 }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
@@ -38,77 +59,81 @@ const IconUser = ({ color = '#FFFFFF', size = 32 }) => (
   </Svg>
 );
 
-const IconStore = ({ color = ACCENT, size = 20 }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-    <Path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
-    <Path d="M9 22V12h6v10" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-  </Svg>
-);
-
-const IconHeart = ({ color = ACCENT, size = 20 }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-    <Path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-  </Svg>
-);
-
-const IconBell = ({ color = ACCENT, size = 20 }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-    <Path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
-    <Path d="M13.73 21a2 2 0 01-3.46 0" stroke={color} strokeWidth="1.8" strokeLinecap="round"/>
-  </Svg>
-);
-
-const IconChevron = ({ color = TEXT_LIGHT, size = 16 }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-    <Path d="M9 18l6-6-6-6" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-  </Svg>
-);
-
-const IconSettings = ({ color = ACCENT, size = 20 }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-    <Circle cx="12" cy="12" r="3" stroke={color} strokeWidth="1.8" fill="none"/>
-    <Path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" stroke={color} strokeWidth="1.8" fill="none"/>
-  </Svg>
-);
-
-const IconShield = ({ color = ACCENT, size = 20 }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-    <Path d="M12 2L4 6v6c0 5 3.5 9.5 8 11 4.5-1.5 8-6 8-11V6l-8-4z" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
-  </Svg>
-);
-
-const IconLogout = ({ color = '#FF3B5C', size = 18 }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-    <Path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
-  </Svg>
-);
-
-const IconBookmark = ({ color = '#00C896', size = 18 }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+const IconBookmark = ({ color = TEXT_DARK, size = 20, filled = false }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill={filled ? color : 'none'}>
     <Path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
   </Svg>
 );
 
-export default function AccountScreen() {
+const IconHeart = ({ color = TEXT_DARK, size = 20, filled = false }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill={filled ? color : 'none'}>
+    <Path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+  </Svg>
+);
+
+const IconShield = ({ color = ACCENT, size = 18 }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Path d="M12 2L4 6v6c0 5 3.5 9.5 8 11 4.5-1.5 8-6 8-11V6l-8-4z" stroke={color} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+  </Svg>
+);
+
+const Stat = ({ value, label, onPress }: { value: string; label: string; onPress?: () => void }) => (
+  <TouchableOpacity style={styles.stat} onPress={onPress} disabled={!onPress} activeOpacity={0.6}>
+    <Text style={styles.statVal}>{value}</Text>
+    <Text style={styles.statLabel}>{label}</Text>
+  </TouchableOpacity>
+);
+
+const extractRecipes = (rows: any[] | null): DbRecipe[] =>
+  (rows || [])
+    .map((d: any) => d.recipes)
+    .filter((r: any) => r != null && (r.status === undefined || r.status === 'approved')) as DbRecipe[];
+
+export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
-  const [supermarche, setSupermarche] = useState('leclerc');
-  const [notifs, setNotifs] = useState(true);
-  const [showSmPicker, setShowSmPicker] = useState(false);
-  const [favCount, setFavCount] = useState(0);
+  const cart = useCart();
   const [user, setUser] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
   const [isUserAdmin, setIsUserAdmin] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
+  const [supermarche, setSupermarche] = useState('leclerc');
+  const [saved, setSaved] = useState<DbRecipe[]>([]);
+  const [liked, setLiked] = useState<DbRecipe[]>([]);
+  const [tab, setTab] = useState<Tab>('saved');
 
   const loadAll = async () => {
+    const sm = await AsyncStorage.getItem('supermarche');
+    if (sm) setSupermarche(sm);
+
     const { data } = await supabase.auth.getUser();
     const u = data?.user || null;
     setUser(u);
 
-    if (u) {
-      await migrateDeviceLikesToUser();
+    if (!u) {
+      setSaved([]);
+      setLiked([]);
+      setIsUserAdmin(false);
+      setLoading(false);
+      return;
     }
 
-    const adminStatus = await isAdmin();
+    await migrateDeviceLikesToUser();
+
+    const [savesRes, likesRes, adminStatus] = await Promise.all([
+      supabase
+        .from('saves')
+        .select('recipe_id, created_at, recipes(*, creators(*))')
+        .eq('user_id', u.id)
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('likes')
+        .select('recipe_id, created_at, recipes(*, creators(*))')
+        .eq('user_id', u.id)
+        .order('created_at', { ascending: false }),
+      isAdmin(),
+    ]);
+    setSaved(extractRecipes(savesRes.data));
+    setLiked(extractRecipes(likesRes.data));
     setIsUserAdmin(adminStatus);
 
     if (adminStatus) {
@@ -117,17 +142,8 @@ export default function AccountScreen() {
         .select('*', { count: 'exact', head: true })
         .eq('status', 'pending');
       setPendingCount(count || 0);
-    } else {
-      setPendingCount(0);
     }
-
-    const sm = await AsyncStorage.getItem('supermarche');
-    if (sm) setSupermarche(sm);
-
-    setFavCount(u ? await countSaved(u.id) : 0);
-
-    const savedNotifs = await AsyncStorage.getItem('notifs');
-    if (savedNotifs !== null) setNotifs(savedNotifs === 'true');
+    setLoading(false);
   };
 
   useFocusEffect(useCallback(() => { loadAll(); }, []));
@@ -139,220 +155,237 @@ export default function AccountScreen() {
     return () => { subscription.unsubscribe(); };
   }, []);
 
-  const changeSupermarche = async (id: string) => {
+  const goSettings = () => { haptic(); router.push('/(modals)/settings' as any); };
+  const goPreferences = () => { haptic(); router.push('/(modals)/preferences' as any); };
+  const goAdmin = () => { haptic(); router.push('/(modals)/admin' as any); };
+  const goSignup = () => { haptic(); router.push('/(modals)/signup' as any); };
+  const goLogin = () => { haptic(); router.push('/(modals)/login' as any); };
+
+  const selectTab = (t: Tab) => {
+    if (t === tab) return;
     haptic();
-    await AsyncStorage.setItem('supermarche', id);
-    setSupermarche(id);
-    setShowSmPicker(false);
+    setTab(t);
   };
 
-  const toggleNotifs = async (val: boolean) => {
-    haptic();
-    setNotifs(val);
-    await AsyncStorage.setItem('notifs', val.toString());
-  };
-
-  const goToFavorites = () => { haptic(); router.push('/(modals)/favorites' as any); };
-  const goToPreferences = () => { haptic(); router.push('/(modals)/preferences' as any); };
-  const goToLogin = () => { haptic(); router.push('/(modals)/login' as any); };
-  const goToSignup = () => { haptic(); router.push('/(modals)/signup' as any); };
-  const goToAdmin = () => { haptic(); router.push('/(modals)/admin' as any); };
-
-  const logout = () => {
+  const confirmUnsave = (recipe: DbRecipe) => {
+    if (!user) return;
+    haptic('medium');
     Alert.alert(
-      'Se déconnecter',
-      'Tu veux vraiment te déconnecter ?',
+      'Retirer cette recette ?',
+      `« ${recipe.title} » ne sera plus dans tes recettes enregistrées.`,
       [
         { text: 'Annuler', style: 'cancel' },
         {
-          text: 'Déconnexion', style: 'destructive',
+          text: 'Retirer',
+          style: 'destructive',
           onPress: async () => {
-            await supabase.auth.signOut();
-            setUser(null);
-            setFavCount(0);
-            setIsUserAdmin(false);
-            setPendingCount(0);
+            setSaved(prev => prev.filter(r => r.id !== recipe.id));
+            await unsaveRecipe(user.id, recipe.id);
           },
         },
       ],
     );
   };
 
-  const currentSM = SUPERMARCHES.find(s => s.id === supermarche) || SUPERMARCHES[0];
-  const userInitial = user?.email ? user.email[0].toUpperCase() : '';
+  const sm = SUPERMARCHES[supermarche] || SUPERMARCHES.leclerc;
 
-  return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-      <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
-        <Text style={styles.title}>Mon compte</Text>
-      </View>
+  const TopBar = (
+    <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
+      <View style={{ width: 38 }} />
+      <Text style={styles.topTitle} numberOfLines={1}>
+        {user?.email ? user.email.split('@')[0] : 'Mon profil'}
+      </Text>
+      <TouchableOpacity style={styles.gearBtn} onPress={goSettings} activeOpacity={0.7} hitSlop={8}>
+        <IconGear />
+      </TouchableOpacity>
+    </View>
+  );
 
-      {user ? (
-        <View style={styles.avatarSection}>
-          <View style={styles.avatarBig}>
-            <Text style={styles.avatarInitial}>{userInitial}</Text>
+  // ---------- Non connecté ----------
+  if (!loading && !user) {
+    return (
+      <View style={styles.container}>
+        {TopBar}
+        <View style={styles.guest}>
+          <View style={styles.guestAvatar}>
+            <IconUser color="#FFFFFF" size={40} />
           </View>
-          <Text style={styles.avatarName} numberOfLines={1}>{user.email}</Text>
-          <Text style={styles.avatarSub}>{isUserAdmin ? 'Admin FeedMe' : 'Membre FeedMe'}</Text>
-        </View>
-      ) : (
-        <View style={styles.authCard}>
-          <View style={styles.authAvatar}>
-            <IconUser color="#FFFFFF" size={32} />
-          </View>
-          <Text style={styles.authTitle}>Crée ton compte FeedMe</Text>
-          <Text style={styles.authDesc}>Sauvegarde tes recettes et retrouve-les{'\n'}sur tous tes appareils</Text>
-          <View style={styles.authBtns}>
-            <TouchableOpacity style={styles.authBtnPrimary} onPress={goToSignup} activeOpacity={0.85}>
-              <Text style={styles.authBtnPrimaryText}>S'inscrire</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.authBtnSecondary} onPress={goToLogin} activeOpacity={0.7}>
-              <Text style={styles.authBtnSecondaryText}>Se connecter</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      )}
-
-      {isUserAdmin && (
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Administration</Text>
-          <TouchableOpacity style={styles.row} onPress={goToAdmin} activeOpacity={0.7}>
-            <View style={styles.rowLeft}>
-              <View style={[styles.rowIcon, styles.adminIcon]}><IconShield color={ACCENT} size={18} /></View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.rowLabel}>Modération & ajout</Text>
-                <Text style={styles.rowValue}>
-                  {pendingCount === 0 ? 'Aucune recette en attente' : pendingCount === 1 ? '1 recette en attente' : `${pendingCount} recettes en attente`}
-                </Text>
-              </View>
-            </View>
-            <View style={styles.rowRight}>
-              {pendingCount > 0 && (
-                <View style={styles.pendingBadge}>
-                  <Text style={styles.pendingBadgeText}>{pendingCount}</Text>
-                </View>
-              )}
-              <IconChevron />
-            </View>
+          <Text style={styles.guestTitle}>Crée ton profil FeedMe</Text>
+          <Text style={styles.guestDesc}>
+            Enregistre tes recettes préférées, like les vidéos{'\n'}et retrouve tout sur tes appareils
+          </Text>
+          <TouchableOpacity style={styles.primaryBtn} onPress={goSignup} activeOpacity={0.85}>
+            <Text style={styles.primaryBtnText}>S'inscrire</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.linkBtn} onPress={goLogin} activeOpacity={0.7}>
+            <Text style={styles.linkBtnText}>J'ai déjà un compte</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.smChip} onPress={goSettings} activeOpacity={0.7}>
+            <Image source={sm.logo} style={styles.smLogo} resizeMode="contain" />
+            <Text style={styles.smChipText}>Mon supermarché : {sm.name}</Text>
           </TouchableOpacity>
         </View>
-      )}
+      </View>
+    );
+  }
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Mon supermarché</Text>
-        <TouchableOpacity style={styles.row} onPress={() => { haptic(); setShowSmPicker(!showSmPicker); }} activeOpacity={0.7}>
-          <View style={styles.rowLeft}>
-            <View style={styles.rowIcon}><IconStore color={ACCENT} size={18} /></View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.rowLabel}>Enseigne choisie</Text>
-              <View style={styles.rowValueRow}>
-                <Image source={currentSM.logo} style={styles.smLogoSmall} resizeMode="contain" />
-                <Text style={styles.rowValue}>{currentSM.name}</Text>
+  const initial = user?.email ? user.email[0].toUpperCase() : '';
+  const data = tab === 'saved' ? saved : liked;
+
+  const Header = (
+    <View>
+      <View style={styles.hero}>
+        <View style={styles.avatar}>
+          <Text style={styles.avatarText}>{initial}</Text>
+        </View>
+        <Text style={styles.handle}>@{user?.email ? user.email.split('@')[0] : ''}</Text>
+        {isUserAdmin && (
+          <View style={styles.adminTag}>
+            <Text style={styles.adminTagText}>Admin FeedMe</Text>
+          </View>
+        )}
+
+        <View style={styles.statsRow}>
+          <Stat value={formatCount(saved.length)} label="Enregistrées" onPress={() => selectTab('saved')} />
+          <View style={styles.statSep} />
+          <Stat value={formatCount(liked.length)} label="J'aime" onPress={() => selectTab('liked')} />
+          <View style={styles.statSep} />
+          <Stat value={String(cart.length)} label="Au panier" />
+        </View>
+
+        <View style={styles.actionsRow}>
+          <TouchableOpacity style={styles.actionBtn} onPress={goPreferences} activeOpacity={0.7}>
+            <Text style={styles.actionText}>Mes préférences</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.actionBtn, styles.actionBtnSm]} onPress={goSettings} activeOpacity={0.7}>
+            <Image source={sm.logo} style={styles.smLogo} resizeMode="contain" />
+            <Text style={styles.actionText} numberOfLines={1}>{sm.name}</Text>
+          </TouchableOpacity>
+        </View>
+
+        {isUserAdmin && (
+          <TouchableOpacity style={styles.adminBanner} onPress={goAdmin} activeOpacity={0.8}>
+            <IconShield />
+            <Text style={styles.adminBannerText}>
+              {pendingCount === 0
+                ? 'Modération : rien en attente'
+                : `Modération : ${pendingCount} recette${pendingCount > 1 ? 's' : ''} en attente`}
+            </Text>
+            {pendingCount > 0 && (
+              <View style={styles.pendingDot}>
+                <Text style={styles.pendingDotText}>{pendingCount}</Text>
               </View>
-            </View>
-          </View>
-          <IconChevron />
-        </TouchableOpacity>
-        {showSmPicker && (
-          <View style={styles.smPicker}>
-            {SUPERMARCHES.map(sm => (
-              <TouchableOpacity
-                key={sm.id}
-                style={[styles.smOption, supermarche === sm.id && styles.smOptionActive]}
-                onPress={() => changeSupermarche(sm.id)}
-                activeOpacity={0.7}
-              >
-                <Image source={sm.logo} style={styles.smLogoSmall} resizeMode="contain" />
-                <Text style={[styles.smOptionName, supermarche === sm.id && styles.smOptionNameActive]}>{sm.name}</Text>
-                {supermarche === sm.id && (
-                  <View style={styles.smCheck}><Text style={styles.smCheckText}>✓</Text></View>
-                )}
-              </TouchableOpacity>
-            ))}
-          </View>
+            )}
+          </TouchableOpacity>
         )}
       </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Mes recettes</Text>
-        <TouchableOpacity style={styles.row} onPress={goToFavorites} activeOpacity={0.7}>
-          <View style={styles.rowLeft}>
-            <View style={styles.rowIcon}><IconBookmark color={ACCENT} size={18} /></View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.rowLabel}>Recettes enregistrées</Text>
-              <Text style={styles.rowValue}>
-                {favCount === 0 ? 'Aucune recette' : favCount === 1 ? '1 recette' : `${favCount} recettes`}
+      <View style={styles.tabs}>
+        <TouchableOpacity style={[styles.tab, tab === 'saved' && styles.tabActive]} onPress={() => selectTab('saved')} activeOpacity={0.7}>
+          <IconBookmark color={tab === 'saved' ? TEXT_DARK : TEXT_LIGHT} filled={tab === 'saved'} />
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.tab, tab === 'liked' && styles.tabActive]} onPress={() => selectTab('liked')} activeOpacity={0.7}>
+          <IconHeart color={tab === 'liked' ? TEXT_DARK : TEXT_LIGHT} filled={tab === 'liked'} />
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
+  return (
+    <View style={styles.container}>
+      {TopBar}
+      <FlatList
+        key={tab}
+        data={loading ? [] : data}
+        keyExtractor={(item) => item.id}
+        numColumns={COLS}
+        columnWrapperStyle={{ gap: GAP }}
+        contentContainerStyle={{ gap: GAP, paddingBottom: 120 }}
+        showsVerticalScrollIndicator={false}
+        ListHeaderComponent={Header}
+        ListEmptyComponent={
+          loading ? null : (
+            <View style={styles.empty}>
+              <Text style={styles.emptyTitle}>
+                {tab === 'saved' ? 'Aucune recette enregistrée' : 'Aucune vidéo likée'}
+              </Text>
+              <Text style={styles.emptySub}>
+                {tab === 'saved'
+                  ? "Appuie sur le signet 🔖 d'une vidéo pour la garder ici"
+                  : 'Les vidéos que tu likes ❤️ apparaîtront ici'}
               </Text>
             </View>
-          </View>
-          <IconChevron />
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Paramètres</Text>
-        <TouchableOpacity style={styles.row} onPress={goToPreferences} activeOpacity={0.7}>
-          <View style={styles.rowLeft}>
-            <View style={styles.rowIcon}><IconSettings color={ACCENT} size={18} /></View>
-            <Text style={styles.rowLabel}>Préférences</Text>
-          </View>
-          <IconChevron />
-        </TouchableOpacity>
-      </View>
-
-      {user && (
-        <View style={styles.section}>
-          <TouchableOpacity style={styles.logoutBtn} onPress={logout} activeOpacity={0.7}>
-            <IconLogout color="#FF3B5C" size={18} />
-            <Text style={styles.logoutText}>Se déconnecter</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      <Text style={styles.version}>FeedMe v1.0.0</Text>
-    </ScrollView>
+          )
+        }
+        renderItem={({ item }) => (
+          <RecipeGridTile
+            recipe={item}
+            width={TILE_WIDTH}
+            onPress={() => { haptic(); openRecipe(item); }}
+            onLongPress={tab === 'saved' ? () => confirmUnsave(item) : undefined}
+          />
+        )}
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
-  header: { paddingHorizontal: 20, paddingBottom: 8, backgroundColor: '#FFFFFF' },
-  title: { fontSize: 32, fontWeight: '900', color: TEXT_DARK, letterSpacing: -1 },
-  avatarSection: { alignItems: 'center', paddingVertical: 24, marginBottom: 8 },
-  avatarBig: { width: 84, height: 84, borderRadius: 42, backgroundColor: ACCENT, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
-  avatarInitial: { fontSize: 36, fontWeight: '900', color: '#FFFFFF' },
-  avatarName: { fontSize: 15, fontWeight: '800', color: TEXT_DARK, paddingHorizontal: 20 },
-  avatarSub: { fontSize: 12, color: TEXT_GRAY, marginTop: 4 },
-  authCard: { marginHorizontal: 16, marginVertical: 14, padding: 22, backgroundColor: ACCENT_BG, borderRadius: 18, alignItems: 'center' },
-  authAvatar: { width: 64, height: 64, borderRadius: 32, backgroundColor: ACCENT, alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
-  authTitle: { fontSize: 17, fontWeight: '900', color: TEXT_DARK, letterSpacing: -0.3, marginBottom: 6 },
-  authDesc: { fontSize: 13, color: TEXT_GRAY, textAlign: 'center', lineHeight: 18, marginBottom: 18 },
-  authBtns: { flexDirection: 'row', gap: 10, alignSelf: 'stretch' },
-  authBtnPrimary: { flex: 1, backgroundColor: ACCENT, borderRadius: 100, padding: 12, alignItems: 'center', shadowColor: '#008C68', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 1, shadowRadius: 0, elevation: 3 },
-  authBtnPrimaryText: { fontSize: 14, fontWeight: '900', color: '#FFFFFF' },
-  authBtnSecondary: { flex: 1, backgroundColor: '#FFFFFF', borderRadius: 100, padding: 12, alignItems: 'center', borderWidth: 1.5, borderColor: ACCENT },
-  authBtnSecondaryText: { fontSize: 14, fontWeight: '800', color: ACCENT },
-  section: { paddingHorizontal: 16, marginBottom: 16 },
-  sectionTitle: { fontSize: 11, fontWeight: '700', color: TEXT_GRAY, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10, paddingHorizontal: 4 },
-  row: { backgroundColor: '#FFFFFF', borderRadius: 14, padding: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, borderWidth: 1, borderColor: BORDER },
-  rowLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
-  rowRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  rowIcon: { width: 36, height: 36, borderRadius: 10, backgroundColor: ACCENT_BG, alignItems: 'center', justifyContent: 'center' },
-  adminIcon: { backgroundColor: '#E8FBF5' },
-  rowLabel: { fontSize: 14, fontWeight: '600', color: TEXT_DARK },
-  rowValue: { fontSize: 12, color: TEXT_GRAY, marginTop: 2 },
-  rowValueRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 },
-  pendingBadge: { backgroundColor: '#FF3B5C', minWidth: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
-  pendingBadgeText: { fontSize: 11, fontWeight: '900', color: '#FFFFFF' },
-  smLogoSmall: { width: 22, height: 22, borderRadius: 5 },
-  smPicker: { backgroundColor: '#FFFFFF', borderRadius: 14, overflow: 'hidden', borderWidth: 1, borderColor: BORDER, marginBottom: 8, marginTop: 4 },
-  smOption: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderBottomWidth: 1, borderBottomColor: BORDER },
-  smOptionActive: { backgroundColor: ACCENT_BG },
-  smOptionName: { flex: 1, fontSize: 14, fontWeight: '600', color: TEXT_DARK },
-  smOptionNameActive: { color: ACCENT, fontWeight: '800' },
-  smCheck: { width: 22, height: 22, borderRadius: 11, backgroundColor: ACCENT, alignItems: 'center', justifyContent: 'center' },
-  smCheckText: { fontSize: 12, fontWeight: '900', color: '#FFFFFF' },
-  logoutBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#FFFFFF', borderRadius: 14, padding: 14, borderWidth: 1, borderColor: '#FFD0D6' },
-  logoutText: { fontSize: 14, fontWeight: '700', color: '#FF3B5C' },
-  version: { textAlign: 'center', fontSize: 12, color: TEXT_LIGHT, marginTop: 8, marginBottom: 30 },
+
+  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 6 },
+  topTitle: { flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '800', color: TEXT_DARK, marginHorizontal: 8 },
+  gearBtn: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center' },
+
+  hero: { alignItems: 'center', paddingHorizontal: 24, paddingTop: 10, paddingBottom: 16 },
+  avatar: { width: 92, height: 92, borderRadius: 46, backgroundColor: ACCENT, alignItems: 'center', justifyContent: 'center' },
+  avatarText: { fontSize: 36, fontWeight: '900', color: '#FFFFFF' },
+  handle: { fontSize: 16, fontWeight: '800', color: TEXT_DARK, marginTop: 10 },
+  adminTag: { marginTop: 6, backgroundColor: ACCENT_BG, borderRadius: 100, paddingHorizontal: 10, paddingVertical: 3 },
+  adminTagText: { fontSize: 11, fontWeight: '800', color: ACCENT },
+
+  statsRow: { flexDirection: 'row', alignItems: 'center', marginTop: 16 },
+  stat: { alignItems: 'center', minWidth: 86 },
+  statVal: { fontSize: 18, fontWeight: '900', color: TEXT_DARK },
+  statLabel: { fontSize: 12, fontWeight: '500', color: TEXT_GRAY, marginTop: 2 },
+  statSep: { width: 1, height: 18, backgroundColor: BORDER },
+
+  actionsRow: { flexDirection: 'row', gap: 8, marginTop: 16, alignSelf: 'stretch' },
+  actionBtn: {
+    flex: 1, height: 40, borderRadius: 8, backgroundColor: '#F2F2F2',
+    alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 6, paddingHorizontal: 10,
+  },
+  actionBtnSm: { flex: 0.8 },
+  actionText: { fontSize: 13, fontWeight: '800', color: TEXT_DARK },
+  smLogo: { width: 20, height: 20, borderRadius: 4 },
+
+  adminBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'stretch',
+    marginTop: 12, backgroundColor: ACCENT_BG, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10,
+  },
+  adminBannerText: { flex: 1, fontSize: 13, fontWeight: '700', color: TEXT_DARK },
+  pendingDot: { minWidth: 22, height: 22, borderRadius: 11, backgroundColor: '#FF3B5C', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
+  pendingDotText: { fontSize: 11, fontWeight: '900', color: '#FFFFFF' },
+
+  tabs: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: BORDER, marginBottom: GAP },
+  tab: { flex: 1, alignItems: 'center', paddingVertical: 11, borderBottomWidth: 2, borderBottomColor: 'transparent' },
+  tabActive: { borderBottomColor: TEXT_DARK },
+
+  empty: { alignItems: 'center', paddingVertical: 50, paddingHorizontal: 32 },
+  emptyTitle: { fontSize: 15, fontWeight: '900', color: TEXT_DARK, marginBottom: 6 },
+  emptySub: { fontSize: 13, color: TEXT_GRAY, textAlign: 'center', lineHeight: 18 },
+
+  guest: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32, paddingBottom: 80 },
+  guestAvatar: { width: 92, height: 92, borderRadius: 46, backgroundColor: '#D8D8D8', alignItems: 'center', justifyContent: 'center', marginBottom: 18 },
+  guestTitle: { fontSize: 20, fontWeight: '900', color: TEXT_DARK, letterSpacing: -0.4, marginBottom: 8 },
+  guestDesc: { fontSize: 14, color: TEXT_GRAY, textAlign: 'center', lineHeight: 20, marginBottom: 24 },
+  primaryBtn: {
+    alignSelf: 'stretch', backgroundColor: ACCENT, borderRadius: 100, paddingVertical: 15, alignItems: 'center',
+    shadowColor: '#008C68', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 1, shadowRadius: 0, elevation: 3,
+  },
+  primaryBtnText: { fontSize: 15, fontWeight: '900', color: '#FFFFFF' },
+  linkBtn: { paddingVertical: 14 },
+  linkBtnText: { fontSize: 14, fontWeight: '800', color: ACCENT },
+  smChip: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 18, backgroundColor: '#F5F5F5', borderRadius: 100, paddingHorizontal: 14, paddingVertical: 8 },
+  smChipText: { fontSize: 13, fontWeight: '700', color: TEXT_DARK },
 });

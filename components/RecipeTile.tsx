@@ -103,7 +103,11 @@ export const RecipeCard = ({ recipe, width, onPress }: TileProps) => {
       <Text style={styles.cardTitle} numberOfLines={2}>{recipe.title}</Text>
       <View style={styles.cardFooter}>
         <View style={[styles.cardAvatar, { backgroundColor: avatarColor }]}>
-          <Text style={styles.cardAvatarText}>{avatarLetters}</Text>
+          {recipe.creators?.avatar_url ? (
+            <Image source={{ uri: recipe.creators.avatar_url }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" />
+          ) : (
+            <Text style={styles.cardAvatarText}>{avatarLetters}</Text>
+          )}
         </View>
         <Text style={styles.cardCreator} numberOfLines={1}>{creatorName}</Text>
         <IconHeart color={TEXT_GRAY} size={11} />
@@ -128,7 +132,7 @@ const styles = StyleSheet.create({
   cardBadgeText: { fontSize: 11, fontWeight: '700', color: '#FFFFFF' },
   cardTitle: { fontSize: 13, fontWeight: '800', color: TEXT_DARK, lineHeight: 17, marginTop: 7, letterSpacing: -0.2 },
   cardFooter: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 5 },
-  cardAvatar: { width: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
+  cardAvatar: { width: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   cardAvatarText: { fontSize: 7, fontWeight: '900', color: '#FFFFFF' },
   cardCreator: { flex: 1, fontSize: 11, fontWeight: '600', color: TEXT_GRAY },
   cardLikes: { fontSize: 11, fontWeight: '600', color: TEXT_GRAY },

@@ -57,6 +57,7 @@ export type DbCreator = {
   name: string;
   avatar_letters: string;
   avatar_color: string;
+  avatar_url?: string | null;
   bio: string | null;
   tiktok_url: string | null;
   instagram_url: string | null;
