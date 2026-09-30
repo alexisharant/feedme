@@ -24,6 +24,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { cartStore, consolidateCart, getDefaultPeople, ingredientKey, toggleChecked, useCart, useCartChecked } from '../../lib/cartStore';
+import { logOrder } from '../../lib/orders';
 import { fetchSavedIds, saveRecipe, unsaveRecipe } from '../../lib/saves';
 import { DbRecipe, formatAmount, getCurrentUserId, getDeviceId, Ingredient, supabase } from '../../lib/supabase';
 import { useTabBarScroll } from '../../lib/tabBarStore';
@@ -508,6 +509,7 @@ export default function FeedScreen() {
   const checkout = () => {
     haptic('success');
     const sm = SUPERMARCHES[supermarche] || SUPERMARCHES.leclerc;
+    logOrder(cart, supermarche, checkedIngs);
     setShowCart(false);
     router.push({ pathname: '/(modals)/webview', params: { url: sm.url, title: sm.name } });
   };
@@ -701,7 +703,8 @@ export default function FeedScreen() {
       {showCart && (
         <View style={styles.drawerOverlay}>
           <TouchableOpacity style={styles.drawerBg} onPress={() => setShowCart(false)} />
-          <View style={styles.drawer}>
+          {/* paddingBottom : laisse la place à la barre d'onglets flottante, qui passe par-dessus */}
+          <View style={[styles.drawer, { paddingBottom: insets.bottom + 88 }]}>
             <View style={styles.drawerHandle} />
             <View style={styles.drawerTitleRow}>
               <IconBag color="#000" size={22} />
@@ -842,13 +845,13 @@ const styles = StyleSheet.create({
 
   drawerOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 500 },
   drawerBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' },
-  drawer: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 20, maxHeight: '85%', borderTopWidth: 1, borderTopColor: '#EFEFEF' },
+  drawer: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 20, maxHeight: '92%', borderTopWidth: 1, borderTopColor: '#EFEFEF' },
   drawerHandle: { width: 36, height: 4, backgroundColor: '#E0E0E0', borderRadius: 2, alignSelf: 'center', marginBottom: 16 },
   drawerTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16 },
   drawerTitle: { fontSize: 20, fontWeight: '900', color: '#000', letterSpacing: -0.5 },
   drawerCount: { fontSize: 12, fontWeight: '600', color: '#8E8E8E', marginLeft: 'auto' },
   drawerEmpty: { textAlign: 'center', fontSize: 14, color: '#8E8E8E', lineHeight: 22, paddingVertical: 24 },
-  drawerScroll: { marginBottom: 14 },
+  drawerScroll: { marginBottom: 14, flexGrow: 0, flexShrink: 1 },
 
   sectionTitle: { fontSize: 13, fontWeight: '800', color: '#000', letterSpacing: -0.3, marginBottom: 10, textTransform: 'uppercase' },
   sectionCount: { fontSize: 12, fontWeight: '600', color: '#8E8E8E', textTransform: 'none' },

@@ -11,6 +11,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import { cartStore, getDefaultPeople, useCart } from '../../lib/cartStore';
+import { logOrder } from '../../lib/orders';
 import { isRecipeSaved, saveRecipe, unsaveRecipe } from '../../lib/saves';
 import { Ingredient, formatAmount, getCurrentUserId } from '../../lib/supabase';
 
@@ -250,6 +251,7 @@ export default function RecipeScreen() {
   const checkout = () => {
     haptic('success');
     const sm = SUPERMARCHES[supermarche] || SUPERMARCHES.leclerc;
+    logOrder(cart, supermarche);
     router.push({ pathname: '/(modals)/webview' as any, params: { url: sm.url, title: sm.name } });
   };
 

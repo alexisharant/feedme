@@ -62,6 +62,8 @@ export default function WebViewScreen() {
       <WebView
         ref={webViewRef}
         source={{ uri: url }}
+        // about:* = cadres internes des sites (pubs, paiement) : on les garde dans la page
+        originWhitelist={['http://*', 'https://*', 'about:*']}
         style={styles.webview}
         onLoadStart={() => setLoading(true)}
         onLoadEnd={() => setLoading(false)}
